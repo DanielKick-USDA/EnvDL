@@ -1,3 +1,15 @@
+/data
+/notebook_artifacts
+
+
+*.tar.gz
+*.7z
+
+
+
+
+# nbdev defaults:
+
 _docs/
 _proc/
 

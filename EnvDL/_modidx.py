@@ -5,4 +5,10 @@ d = { 'settings': { 'branch': 'main',
                 'doc_host': 'https://DanielKick-USDA.github.io',
                 'git_url': 'https://github.com/DanielKick-USDA/EnvDL',
                 'lib_path': 'EnvDL'},
-  'syms': {'EnvDL.core': {'EnvDL.core.foo': ('core.html#foo', 'EnvDL/core.py')}}}
+  'syms': { 'EnvDL.core': { 'EnvDL.core.ensure_dir_path_exists': ('core.html#ensure_dir_path_exists', 'EnvDL/core.py'),
+                            'EnvDL.core.find_df_col_mismatches': ('core.html#find_df_col_mismatches', 'EnvDL/core.py'),
+                            'EnvDL.core.find_df_shared_cols': ('core.html#find_df_shared_cols', 'EnvDL/core.py'),
+                            'EnvDL.core.sanitize_col': ('core.html#sanitize_col', 'EnvDL/core.py'),
+                            'EnvDL.core.summarize_col_missing': ('core.html#summarize_col_missing', 'EnvDL/core.py')},
+            'EnvDL.g2fc': {},
+            'EnvDL.g2fc_core': {'EnvDL.g2fc_core.foo': ('01.gcore.html#foo', 'EnvDL/g2fc_core.py')}}}
