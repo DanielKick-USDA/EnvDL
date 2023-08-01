@@ -8,6 +8,7 @@ jupyter: python3
 
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:17:14.822497Z', start_time: '2023-08-01T21:17:14.612448Z'}
 import os
 
 import numpy as np
@@ -25,6 +26,7 @@ from EnvDL.dna import *
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:17:15.125650Z', start_time: '2023-08-01T21:17:15.123606Z'}
 cache_path = '../nbs_artifacts/01.05_g2fc_demo_model/'
 ensure_dir_path_exists(dir_path = cache_path)
 ```
@@ -32,59 +34,21 @@ ensure_dir_path_exists(dir_path = cache_path)
 ## Load phenotypic data to match
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:17:22.626215Z', start_time: '2023-08-01T21:17:22.555551Z'}
 load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
-phno = pd.read_csv(load_from+'phno3.csv')
+phno = pd.read_csv(load_from+'phno.csv')
 phno
 ```
-
-```{python}
-# uniq_hybrids = list(set(phno.Hybrid))
-# uniq_hybrids[0:3]
-```
-
-```{python}
-# # check snp records and only keep phenotypes with snp data
-# snps_found = [exists_geno((taxa_to_filename(taxa = ith_hybrid))) for ith_hybrid in  uniq_hybrids]
-```
-
-```{python}
-# temp = pd.DataFrame(zip(uniq_hybrids, snps_found), columns=['Hybrid', 'SNPS'])
-# temp.loc[(temp.SNPS != True)]
-```
-
-```{python}
-# print('Genotypes flagged as missing that exist with different capitalization:')
-# missing_hybrids = temp.loc[(temp.SNPS != True), ['Hybrid']]
-# # quick check that some of these aren't just differing in capitalization
-# missing_hybrids_list = [e.replace('/', '__').lower() for e in list(missing_hybrids.Hybrid)]
-# print(
-#     [e for e in [e.lower for e in os.listdir('../data/zma/g2fc/genotypes/snps/')] if e in missing_hybrids_list]
-# )
-```
-
-```{python}
-# print(
-#     str(missing_hybrids.merge(phno, how = 'left').shape[0]
-#        )+' observations ('+str(round(100 * (missing_hybrids.merge(phno, how = 'left').shape[0]/phno.shape[0]), 3)
-#        )+'%) missing genotype.'
-# )
-```
-
-```{python}
-# # limit to phno with snp data
-# phno = temp.loc[(temp.SNPS == True)].merge(phno, how = 'left')
-# phno.to_csv(cache_path+'phno_geno_filter.csv', index=False)
-# phno
-```
-
 
 ## Different ways to represent Genotype
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:17:26.796961Z', start_time: '2023-08-01T21:17:26.794169Z'}
 ith_hybrid = 'M0088/LH185'
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:17:27.471737Z', start_time: '2023-08-01T21:17:27.465087Z'}
 res = get_geno(taxa_to_filename(taxa = ith_hybrid)) 
 res = res[1:] # drop taxa
 res[0:10]
@@ -93,45 +57,50 @@ res[0:10]
 ###
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:17:28.646153Z', start_time: '2023-08-01T21:17:28.642211Z'}
 len(res)
 # px.imshow( res )
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:17:31.101615Z', start_time: '2023-08-01T21:17:30.970506Z'}
 res = list_to_ACGT(in_seq = res)
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:17:31.397909Z', start_time: '2023-08-01T21:17:31.209571Z'}
 px.imshow( res[0:20, ] )
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:17:34.076535Z', start_time: '2023-08-01T21:17:33.571430Z'}
 res_hilb = np_2d_to_hilbert(
     in_seq = res
 )
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:17:34.119880Z', start_time: '2023-08-01T21:17:34.077414Z'}
 px.imshow( res_hilb[:, :, 0] )
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:17:34.538483Z', start_time: '2023-08-01T21:17:34.486761Z'}
 px.imshow( res_hilb[:, :, 1] )
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:17:36.396506Z', start_time: '2023-08-01T21:17:36.394295Z'}
 # using kegg
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:17:36.582186Z', start_time: '2023-08-01T21:17:36.577817Z'}
 from EnvDL.kegg import *
 ```
 
-
-
-
-
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:13.904018Z', start_time: '2023-08-01T21:18:13.706118Z'}
 geno_path = '../data/zma/g2fc/genotypes/'
 # Useful for converting between the physical location and site
 geno_site = pd.read_table(geno_path+'5_Genotype_Data_All_Years_Filter_SiteSummary.txt'
@@ -140,23 +109,25 @@ geno_site.head()
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:14.508367Z', start_time: '2023-08-01T21:18:14.506007Z'}
 geno_site['kegg_index'] = np.nan
 ```
 
-
-
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:15.307457Z', start_time: '2023-08-01T21:18:15.074213Z'}
 import pickle as pkl
 with open('../data/zma/kegg/kegg_gene_entries.pkl', 'rb') as handle:
     kegg_gene_entries = pkl.load(handle)
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:20.676914Z', start_time: '2023-08-01T21:18:20.674766Z'}
 # TODO
 # how should I deal with complements?
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:21.134796Z', start_time: '2023-08-01T21:18:21.130593Z'}
 # takes in a position string, returns a list with [chromosome, start, stop, complement]
 def parse_kegg_position(POSITION = '7:2815028..2815922'):
     import re
@@ -172,25 +143,30 @@ def parse_kegg_position(POSITION = '7:2815028..2815922'):
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:21.933656Z', start_time: '2023-08-01T21:18:21.929794Z'}
 len(kegg_gene_entries)
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:22.466273Z', start_time: '2023-08-01T21:18:22.450679Z'}
 # not all entries have positions and some are unknown
 kegg_gene_entries = [e for e in kegg_gene_entries if 'POSITION' in e.keys()]
 len(kegg_gene_entries)
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:22.938273Z', start_time: '2023-08-01T21:18:22.921102Z'}
 kegg_gene_entries = [e for e in kegg_gene_entries if e['POSITION']!='Unknown']
 len(kegg_gene_entries)
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:23.530930Z', start_time: '2023-08-01T21:18:23.378995Z'}
 kegg_gene_entry_positions = [parse_kegg_position(e['POSITION']) for e in kegg_gene_entries]
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:24.152555Z', start_time: '2023-08-01T21:18:24.139747Z'}
 # drop Plastid genes
 is_Pltd = [True if e[0]=='Pltd' else False for e in kegg_gene_entry_positions]
 
@@ -207,6 +183,7 @@ len(kegg_gene_entries)
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:26.302130Z', start_time: '2023-08-01T21:18:26.289451Z'}
 # all position entries must have 4 values
 is_right_len = [len(e) == 4 for e in kegg_gene_entry_positions]
 
@@ -219,6 +196,7 @@ len(kegg_gene_entries)
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:41.490627Z', start_time: '2023-08-01T21:18:26.634603Z'}
 for i in range(len(kegg_gene_entries)):
     ith_chr, ith_loc_start, ith_loc_stop, ith_strand = kegg_gene_entry_positions[i]
     mask = ((geno_site.Chromosome == int(ith_chr)
@@ -229,12 +207,14 @@ for i in range(len(kegg_gene_entries)):
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:41.509674Z', start_time: '2023-08-01T21:18:41.491554Z'}
 geno_site.loc[np.isnan(geno_site.kegg_index), 'kegg_index'] = -1
 geno_site.kegg_index = geno_site.kegg_index.astype(int)
 geno_site
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:41.594249Z', start_time: '2023-08-01T21:18:41.510287Z'}
 temp = geno_site.groupby('kegg_index'
                  ).count(
                  ).reset_index(
@@ -245,21 +225,25 @@ temp
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:41.597722Z', start_time: '2023-08-01T21:18:41.595299Z'}
 print('Kegg entries with SNPs: '+str(temp[((temp.kegg_index != -1
                                        ) & (temp.Count > 1))].shape[0]))
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:41.622359Z', start_time: '2023-08-01T21:18:41.598318Z'}
 px.histogram(temp.loc[(temp.kegg_index != -1),], 
              x = 'Count',
             title= 'Observed SNPS per ')
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:41.625111Z', start_time: '2023-08-01T21:18:41.622935Z'}
 print('Kegg entries with SNPs: '+str(temp[(temp.kegg_index != -1)].shape[0]))
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:41.633594Z', start_time: '2023-08-01T21:18:41.625705Z'}
 temp = pd.DataFrame(
     zip(
         range(20),
@@ -270,43 +254,52 @@ temp.head()
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:41.652937Z', start_time: '2023-08-01T21:18:41.634131Z'}
 # decrease appears to be log linear
 px.scatter(temp, x = 'MoreThanXSNPs', y = 'Genes', log_y= True)
 ```
 
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:41.672384Z', start_time: '2023-08-01T21:18:41.653502Z'}
 kegg_index = 35628
 
 geno_site.loc[(geno_site.kegg_index == kegg_index)]
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:41.675025Z', start_time: '2023-08-01T21:18:41.673521Z'}
 # kegg_gene_entries[kegg_index]
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:41.677852Z', start_time: '2023-08-01T21:18:41.675957Z'}
 ith_seq = kegg_gene_entries[kegg_index]['NTSEQ']['seq']
 ith_seq
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:41.679712Z', start_time: '2023-08-01T21:18:41.678410Z'}
 ith_chr, ith_loc_start, ith_loc_stop, ith_strand = kegg_gene_entry_positions[kegg_index]
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:41.682009Z', start_time: '2023-08-01T21:18:41.680274Z'}
 len(ith_seq)
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:41.684225Z', start_time: '2023-08-01T21:18:41.682532Z'}
 98444732-98449260
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:41.686736Z', start_time: '2023-08-01T21:18:41.684769Z'}
 kegg_gene_entries[kegg_index]
 ```
 
 ```{python}
+#| ExecuteTime: {end_time: '2023-08-01T21:18:41.705105Z', start_time: '2023-08-01T21:18:41.687268Z'}
 px.scatter(geno_site.loc[(geno_site.kegg_index == kegg_index)], x = 'Position', y = 'Ref' )
 ```
 
