@@ -1,9 +1,15 @@
 /data
-/notebook_artifacts
+/nbs_artifacts
 
+*.html
 
 *.tar.gz
 *.7z
+
+# notebooks to be adapted ----
+nbs/[0-9][0-9]_*
+
+
 
 
 
