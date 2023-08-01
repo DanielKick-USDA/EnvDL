@@ -9,6 +9,8 @@
 # notebooks to be adapted ----
 nbs/[0-9][0-9]_*
 
+# improper csvs (from adapting qmd files)
+nbs/*.csv
 
 
 
