@@ -1,0 +1,1108 @@
+---
+title: Prepare Hibert Tensors
+jupyter: python3
+---
+
+
+> 
+
+
+
+```{python}
+import os
+
+import numpy as np
+import pandas as pd
+pd.set_option('display.max_columns', None)
+
+import plotly.express as px
+
+import hilbertcurve
+from hilbertcurve.hilbertcurve import HilbertCurve
+
+from EnvDL.core import *
+# from EnvDL.kegg import *
+from EnvDL.dna import *
+
+from tqdm import tqdm
+```
+
+```{python}
+cache_path = '../nbs_artifacts/01.06_g2fc_prep_hilbert_tensor/'
+ensure_dir_path_exists(dir_path = cache_path)
+```
+
+## Load data
+
+```{python}
+load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
+phno = pd.read_csv(load_from+'phno3.csv')
+YMat = np.load(load_from+'YMat3.npy')
+GMat = np.load(load_from+'GMat3.npy')
+# SMat = np.load(load_from+'SMat3.npy')
+# WMat = np.load(load_from+'WMat3.npy')
+# MMat = np.load(load_from+'MMat3.npy')
+```
+
+```{python}
+load_from = '../nbs_artifacts/01.05_g2fc_demo_model/'
+phno_geno = pd.read_csv(load_from+'phno_geno_filter.csv')
+```
+
+```{python}
+# phno_geno
+```
+
+```{python}
+# # restrict to observations with snp data
+# phno = phno.merge(phno_geno.loc[:, ['Hybrid', 'SNPS']].drop_duplicates(), how  = 'left')
+# phno = phno.loc[(phno.SNPS == True)].copy()
+# phno
+```
+
+```{python}
+# no longer needed. Dropped missing values in 01.03
+
+# # Some (1265) 2022 entries are missing yield data. Drop these. 
+# phno = phno.loc[~(phno.Yield_Mg_ha.isna()), ].copy()
+# phno
+```
+
+## Ways to include genomic data
+
+```{python}
+idx = 106261
+```
+
+```{python}
+# One hot encoded by parents
+print(GMat.shape[1])
+GMat[idx, :]
+```
+
+```{python}
+ith_hybrid = phno.loc[idx, 'Hybrid']
+res = get_geno(taxa_to_filename(taxa = ith_hybrid)) 
+res = res[1:] # drop taxa
+print(len(res))
+res[0:10]
+```
+
+```{python}
+res = list_to_ACGT(in_seq = res)
+print(res.shape)
+res
+```
+
+```{python}
+res_hilb = np_2d_to_hilbert(
+    in_seq = res
+)
+print(res_hilb.shape)
+px.imshow( res_hilb[:, :, 0] )
+```
+
+## Unique Genotypes
+There are huge data savings to be had from keeping only deduplciated genomic data in memory in the GPU. 
+
+```{python}
+# obs_lookup = phno.loc[:, ['Hybrid']
+#                              ].drop_duplicates(
+#                              ).reset_index(
+#                              ).rename(columns = {'index':'Is_Phno_Idx'}
+#                              ).reset_index().rename(columns = {'index':'Geno_Idx'})
+# # add in obs idx in phno
+# obs_lookup = phno.merge(obs_lookup).reset_index().rename(columns = {'index':'Phno_Idx'})
+# obs_lookup
+```
+
+```{python}
+# obs_geno_lookup = obs_lookup.loc[: ,  ['Phno_Idx', 'Geno_Idx', 'Is_Phno_Idx']]
+# obs_geno_lookup
+```
+
+```{python}
+if os.path.exists(cache_path+'ACGT.npy'):
+    ACGT = np.load(cache_path+'ACGT.npy')
+else:
+    temp = obs_geno_lookup.drop(columns = 'Phno_Idx').drop_duplicates().reset_index(drop=True)
+
+    ACGT = np.ndarray(shape = (temp.shape[0], 125891, 4))
+
+    for i in tqdm(temp.index):
+        phno_idx = temp.loc[i, 'Is_Phno_Idx']
+        ith_hybrid = phno.loc[phno_idx, 'Hybrid']
+        res = get_geno(taxa_to_filename(taxa = ith_hybrid)) 
+        res = res[1:] # drop taxa
+        res = list_to_ACGT(in_seq = res)
+        ACGT[i, :, :] = res[None, :, :]
+        
+    # Swap axes to match pytorch convention
+    # (4926, 125891, 4)
+    ACGT = np.swapaxes(ACGT, 1, 2)
+
+    # set missings to 0 
+    ACGT[np.isnan(ACGT)] = 0
+
+    np.save(cache_path+'ACGT.npy', ACGT)
+```
+
+```{python}
+if os.path.exists(cache_path+'ACGT_hilb.npy'):
+    ACGT_hilb = np.load(cache_path+'ACGT_hilb.npy')
+else:
+    ACGT_hilb = np_3d_to_hilbert( np.swapaxes(ACGT, 1, 2) ) # swap channels back to dim 2 before running
+
+    # ACGT_hilb.shape
+    # (4926, 256, 512, 4)
+    # Pytorch standard has channels second
+    ACGT_hilb = np.swapaxes(ACGT_hilb, 1, 3)
+    ACGT_hilb = np.swapaxes(ACGT_hilb, 2, 3)
+
+    # set missings to 0
+    ACGT_hilb[np.isnan(ACGT_hilb)] = 0
+
+    np.save(cache_path+'ACGT_hilb.npy', ACGT_hilb)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# END
+
+## Demo Modeling Shared Setup
+
+Set absolutely tiny train/test sets to work out the logistics.
+
+```{python}
+mask = ((phno.Year == 2021
+      ) & (phno.Env == 'IAH1_2021'))
+tiny_idxs = phno.loc[mask].index
+
+
+test_idx = list(np.random.choice(tiny_idxs, 100))
+train_idx = [e for e in tiny_idxs if e not in test_idx]
+
+print('Observations per set:', len(test_idx), len(train_idx))
+```
+
+```{python}
+# dataloader_batch_size = 8 #16 #64
+# run_epochs = 200
+
+use_gpu_num = 0
+
+# Imports --------------------------------------------------------------------
+import torch
+from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
+from torch import nn
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+if use_gpu_num in [0, 1]: 
+    torch.cuda.set_device(use_gpu_num)
+print(f"Using {device} device")
+```
+
+```{python}
+from EnvDL.kegg import get_cached_result, put_cached_result
+
+# Functions from 09_
+def calc_cs(x # numeric array
+           ): 
+    "Calculate nan mean and nan std of an array. Returned as list"
+    import numpy as np
+    return [np.nanmean(x, axis = 0), np.nanstd(x, axis = 0)]
+
+
+
+def apply_cs(xs, 
+             cs_dict_entry # list of length 2 containing mean and s
+            ): return ((xs - cs_dict_entry[0]) / cs_dict_entry[1])
+
+
+def reverse_cs(xs, cs_dict_entry): return (cs_dict_entry[1] * xs) + cs_dict_entry[0]
+```
+
+## GMat Model
+
+```{python}
+# # obs_geno_lookup # Phno_Idx	Geno_Idx	Is_Phno_Idx
+# idx_lookup = np.asarray(obs_geno_lookup)
+
+# idx = 0
+```
+
+```{python}
+
+
+YMat_cs = calc_cs(YMat[train_idx])
+
+y_cs = apply_cs(YMat, YMat_cs)
+
+```
+
+```{python}
+class ACGTDataset(Dataset):
+    def __init__(self, 
+                 y, 
+                 G, # not on gpu
+                 idx_original,
+                 idx_lookup,
+                 transform = None, target_transform = None,
+                 use_gpu_num = 0,
+                 **kwargs # use to allow for cpu to be passed into function 
+                ):
+        if 'device' in kwargs.keys():
+            pass
+        else:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            if use_gpu_num in [0, 1]: 
+                torch.cuda.set_device(use_gpu_num)
+        print(f"Using {device} device")
+        self.device = device
+        
+        self.y = y 
+        self.G = G
+        self.idx_original = idx_original
+        self.idx_lookup = idx_lookup
+        self.transform = transform
+        self.target_transform = target_transform    
+        
+    def __len__(self):
+        return len(self.y)
+    
+    def __getitem__(self, idx):
+#         y_idx = torch.from_numpy(np.asarray(self.y[idx])).to(self.device).float()
+        y_idx =self.y[idx]
+            
+        #                 |array containing correct index in deduplicated g 
+        #                 |               index in phno    
+        uniq_g_idx = self.idx_lookup[self.idx_original[idx], 1]
+        g_idx = self.G[uniq_g_idx, :, :]
+        
+#         g_idx = torch.from_numpy(g_idx)#.to(self.device).float()
+        
+        # send all to gpu
+        
+        if (self.device != 'cpu'):
+            if y_idx.device.type == 'cpu':
+                y_idx = y_idx.to(device) 
+                
+            if g_idx.device.type == 'cpu':
+                g_idx = g_idx.to(device) 
+        
+        
+        if self.transform:
+            g_idx = self.transform(g_idx)
+            
+        if self.target_transform:
+            y_idx = self.transform(y_idx)
+        return g_idx, y_idx
+
+
+
+
+
+training_dataloader = DataLoader(
+    ACGTDataset(y = torch.from_numpy(y_cs[train_idx])[:, None].to(torch.float), 
+                G = torch.from_numpy(ACGT).to(torch.float), 
+#                 G = torch.from_numpy(ACGT).to(torch.float32), 
+                idx_original = torch.from_numpy(np.array(train_idx)),
+                idx_lookup   = torch.from_numpy(np.asarray(obs_geno_lookup)),
+                use_gpu_num = 0
+               ),
+    batch_size = 50,
+    shuffle = True
+)
+
+testing_dataloader = DataLoader(
+    ACGTDataset(y = torch.from_numpy(y_cs[test_idx])[:, None].to(torch.float), 
+                G = torch.from_numpy(ACGT).to(torch.float), 
+#                 G = torch.from_numpy(ACGT).to(torch.float32), 
+                idx_original = torch.from_numpy(np.array(test_idx)),
+                idx_lookup   = torch.from_numpy(np.asarray(obs_geno_lookup)),
+                use_gpu_num = 0
+               ),
+    batch_size = 50,
+    shuffle = True
+)
+```
+
+```{python}
+#I would like this to be stored in cache_path to make for easier re-instatiation, but it seems that
+# saving a text file and then calling eval() isn't recommended. Pytorch can write the weights with 
+# the class (sort of) but that is not advisable either because:
+# "pickle does not save the model class itself. Rather, it saves a path to the file containing the 
+# class, ... your code can break in various ways when used in other projects or after refactors."
+# https://pytorch.org/tutorials/beginner/saving_loading_models.html#save-load-entire-model
+
+class NeuralNetwork(nn.Module):
+    def __init__(self):
+        super(NeuralNetwork, self).__init__()    
+        self.x_network = nn.Sequential(
+            nn.Flatten(),
+            nn.ReLU(),
+            nn.Linear(4*125891, 16),
+            nn.ReLU(),
+            nn.Linear(16, 1)
+        )
+        
+    def forward(self, x):
+        x_out = self.x_network(x)
+        return x_out
+```
+
+```{python}
+model = NeuralNetwork().to(device)
+
+model(next(iter(training_dataloader))[0][0:5])
+```
+
+```{python}
+def train_loop(dataloader, model, loss_fn, optimizer, silent = False):
+#     import numpy as np
+#     import pandas as pd
+    import torch
+    from torch.utils.data import Dataset
+    from torch.utils.data import DataLoader
+#     from torch import nn
+    size = len(dataloader.dataset)
+    for batch, (xs_i, y_i) in enumerate(dataloader):
+        # Compute prediction and loss
+        pred = model(xs_i)
+        loss = loss_fn(pred, y_i) # <----------------------------------------
+
+        # Backpropagation
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        if batch % 100 == 0:
+            loss, current = loss.item(), batch * len(y_i) # <----------------
+            if not silent:
+                print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+```
+
+```{python}
+def train_error(dataloader, model, loss_fn, silent = False):
+#     import numpy as np
+#     import pandas as pd
+    import torch
+    from torch.utils.data import Dataset
+    from torch.utils.data import DataLoader
+#     from torch import nn
+    size = len(dataloader.dataset)
+    num_batches = len(dataloader)
+    train_loss = 0
+
+    with torch.no_grad():
+        for xs_i, y_i in dataloader:
+            pred = model(xs_i)
+            train_loss += loss_fn(pred, y_i).item() # <----------------------
+            
+    train_loss /= num_batches
+    return(train_loss) 
+```
+
+```{python}
+def test_loop(dataloader, model, loss_fn, silent = False):
+#     import numpy as np
+#     import pandas as pd
+    import torch
+    from torch.utils.data import Dataset
+    from torch.utils.data import DataLoader
+#     from torch import nn
+
+    size = len(dataloader.dataset)
+    num_batches = len(dataloader)
+    test_loss = 0
+
+    with torch.no_grad():
+        for xs_i, y_i in dataloader:
+            pred = model(xs_i)
+            test_loss += loss_fn(pred, y_i).item() # <-----------------------
+
+    test_loss /= num_batches
+    if not silent:
+        print(f"Test Error: Avg loss: {test_loss:>8f}")
+    return(test_loss) 
+```
+
+```{python}
+def train_nn(
+    cache_path,
+    training_dataloader,
+    testing_dataloader,
+    model,
+    learning_rate = 1e-3,
+    batch_size = 64,
+    epochs = 500
+):
+    import numpy as np
+    import pandas as pd
+    import torch
+#     from torch.utils.data import Dataset
+#     from torch.utils.data import DataLoader
+    from torch import nn
+    
+    # Initialize the loss function
+    loss_fn = nn.MSELoss()
+    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
+
+    loss_df = pd.DataFrame([i for i in range(epochs)], columns = ['Epoch'])
+    loss_df['TrainMSE'] = np.nan
+    loss_df['TestMSE']  = np.nan
+
+    for t in tqdm(range(epochs)):        
+        # print(f"Epoch {t+1}\n-------------------------------")
+        train_loop(training_dataloader, model, loss_fn, optimizer, silent = True)
+
+        loss_df.loc[loss_df.index == t, 'TrainMSE'
+                   ] = train_error(training_dataloader, model, loss_fn, silent = True)
+        
+        loss_df.loc[loss_df.index == t, 'TestMSE'
+                   ] = test_loop(testing_dataloader, model, loss_fn, silent = True)
+        
+        if (t+1)%5 == 0: # Cache in case training is interupted. 
+            # print(loss_df.loc[loss_df.index == t, ['TrainMSE', 'TestMSE']])
+            torch.save(model.state_dict(), 
+                       cache_path+'/model_'+str(t)+'_'+str(epochs)+'.pt') # convention is to use .pt or .pth
+        
+    return([model, loss_df])
+```
+
+```{python}
+# helper function. Clear out cache
+
+def remove_matching_files(
+    cache_path, # Directory to query
+    match_regex_list = ['.*\.pt', 'yhats\.csv', 'loss_df\.csv'], # List of regexes to match (okay if two regexes match the same entry)
+    dry_run = True # Print files to be deleted or delete them. 
+):
+    "Remove files from a folder if they match one of a given set of regexes. Ignores directories in directory. Useful for clearing out model artifacts."
+    import os
+    import re
+    # if empty set is provided, match nothing.
+    if match_regex_list == []:
+        match_regex_list = ['']
+    
+    files_to_remove = [[e for e in os.listdir(cache_path) if re.match(match_regex, e)
+                       ] for match_regex in match_regex_list]
+    # make a (potential) list of lists into a flat list
+    new_list = []
+    for sub_list in files_to_remove:
+        new_list = new_list + sub_list
+    # ensure it's deduplicated in case two regexes match with the same item
+    files_to_remove = list(set(new_list))
+    # remove any directories from consideration
+    files_to_remove = [e for e in files_to_remove if os.path.isfile(cache_path+e)]
+    # sort to make output more pleasant
+    files_to_remove.sort()
+
+    if files_to_remove == []:
+        print('No files found to remove.')
+    else:
+        if dry_run:
+            print('Command would remove:')
+            print('\n'.join(files_to_remove))
+        else:
+            for file in files_to_remove:
+                os.remove(cache_path+file)
+
+# remove_matching_files(
+#     cache_path,
+#     match_regex_list = ['.*\.pt', 'yhats\.csv', 'loss_df\.csv'],
+#     dry_run = False
+# )
+```
+
+```{python}
+
+
+
+
+
+```
+
+
+
+```{python}
+model = NeuralNetwork().to(device)
+
+model(next(iter(training_dataloader))[0][0:5])
+```
+
+```{python}
+learning_rate = 1e-3
+batch_size = 50 #dataloader_batch_size,
+epochs = 2
+
+loss_fn = nn.MSELoss()
+optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
+
+loss_df = pd.DataFrame([i for i in range(epochs)], columns = ['Epoch'])
+loss_df['TrainMSE'] = np.nan
+loss_df['TestMSE']  = np.nan
+
+train_loop(training_dataloader, model, loss_fn, optimizer, silent = False)
+
+t = 0 
+loss_df.loc[loss_df.index == t, 'TrainMSE'
+           ] = train_error(training_dataloader, model, loss_fn, silent = True)
+
+loss_df.loc[loss_df.index == t, 'TestMSE'
+           ] = test_loop(testing_dataloader, model, loss_fn, silent = True)
+```
+
+```{python}
+model(next(iter(training_dataloader))[0][0:5])
+```
+
+```{python}
+loss_df
+```
+
+```{python}
+# xs_i, y_i = next(iter(training_dataloader))
+# [xs_i.isnan().sum(), y_i.isnan().sum()]
+```
+
+
+
+
+```{python}
+# model.to(device)    
+
+model, loss_df = train_nn(
+    cache_path,
+    training_dataloader,
+    testing_dataloader,
+    model,
+    learning_rate = 1e-3,
+    batch_size = 50, #dataloader_batch_size,
+    epochs = 2 #(run_epochs - epochs_run)
+)
+
+loss_df
+```
+
+```{python}
+def yhat_loop(dataloader, model):
+    import numpy as np
+    import pandas as pd
+    import torch
+#     from torch.utils.data import Dataset
+#     from torch.utils.data import DataLoader
+#     from torch import nn
+
+    
+    size = len(dataloader.dataset)
+    num_batches = len(dataloader)
+    
+    y_true = np.array([])
+    y_pred = np.array([])
+    
+    with torch.no_grad():
+        for xs_i, y_i in dataloader:
+            yhat_i = model(xs_i)
+            y_pred = np.append(y_pred, np.array(yhat_i.cpu()))
+            y_true = np.append(y_true, np.array(y_i.cpu()))
+    
+    out = np.concatenate([y_true[:, None], y_pred[:, None]], axis = 1) 
+    out = pd.DataFrame(out, columns = ['y_true', 'y_pred'])
+    return(out)
+```
+
+```{python}
+remove_matching_files(
+    cache_path,
+    match_regex_list = ['.*\.pt', 'yhats\.csv', 'loss_df\.csv'],
+    dry_run = False
+)
+```
+
+```{python}
+dataloader_batch_size = 50
+run_epochs = 50
+
+# don't run if either of these exist because there may be cases where we want the results but not the model
+import re
+
+if not os.path.exists(cache_path+'/model.pt'): 
+    # Shared setup (train from scratch and load latest)
+    model = NeuralNetwork()
+
+    # find the biggest model to save
+    saved_models = os.listdir(cache_path)
+    saved_models = [e for e in saved_models if re.match('model*', e)]
+
+    if saved_models == []:
+        epochs_run = 0
+    else:
+        saved_models = [e for e in saved_models if e != 'model.pt']
+        # if there are saved models reload and resume training
+        saved_models_numbers = [int(e.replace('model_', ''
+                                    ).replace('.pt', ''
+                                    ).split('_')[0]) for e in saved_models]
+        # saved_models
+        epochs_run = max(saved_models_numbers)+1 # add 1 to account for 0 index
+        latest_model = [e for e in saved_models if re.match(
+            '^model_'+str(epochs_run-1)+'_.*\.pt$', e)][0] # subtract 1 to convert back
+        model.load_state_dict(torch.load('../models/'+nb_name+'/'+latest_model))
+        print('Resuming Training: '+str(epochs_run)+'/'+str(run_epochs)+' epochs run.')
+    
+    model.to(device)    
+
+    model, loss_df = train_nn(
+        cache_path,
+        training_dataloader,
+        testing_dataloader,
+        model,
+        learning_rate = 1e-3,
+        batch_size = dataloader_batch_size,
+        epochs = (run_epochs - epochs_run)
+    )
+    
+    # experimental outputs:
+    # 1. Model
+    torch.save(model.state_dict(), cache_path+'/model.pt') # convention is to use .pt or .pth
+
+    # 2. loss_df
+    loss_df.to_csv(cache_path+'/loss_df.csv', index=False)  
+    
+    # 3. predictions 
+    yhats = pd.concat([
+        yhat_loop(testing_dataloader, model).assign(Split = 'Test'),
+        yhat_loop(training_dataloader, model).assign(Split = 'Train')], axis = 0)
+
+    yhats.to_csv(cache_path+'/yhats.csv', index=False)
+```
+
+### Standard Visualizations
+
+```{python}
+scale_dict = {'y1':YMat_cs}
+import plotly.graph_objects as go
+```
+
+```{python}
+loss_df = pd.read_csv(cache_path+'/loss_df.csv')
+
+loss_df.TrainMSE = reverse_cs(loss_df.TrainMSE, scale_dict['y1'])
+loss_df.TestMSE  = reverse_cs(loss_df.TestMSE , scale_dict['y1'])
+
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=loss_df.Epoch, y=loss_df.TestMSE,
+                    mode='lines', name='Test'))
+fig.add_trace(go.Scatter(x=loss_df.Epoch, y=loss_df.TrainMSE,
+                    mode='lines', name='Train'))
+fig.show()
+```
+
+```{python}
+yhats
+px.scatter(yhats, x = 'y_true', y = 'y_pred', color = 'Split')
+```
+
+```{python}
+yhats = pd.read_csv(cache_path+'/yhats.csv')
+
+yhats.y_true = reverse_cs(yhats.y_true, scale_dict['y1'])
+yhats.y_pred = reverse_cs(yhats.y_pred, scale_dict['y1'])
+
+px.scatter(yhats, x = 'y_true', y = 'y_pred', color = 'Split', trendline="ols")
+```
+
+```{python}
+yhats['Error'] = yhats.y_pred - yhats.y_true
+
+px.histogram(yhats, x = 'Error', color = 'Split',
+             marginal="box", # can be `rug`, `violin`
+             nbins= 50)
+```
+
+## Demo Package for Gradio
+
+```{python}
+# cached_model = NeuralNetwork()
+# cached_model.load_state_dict(torch.load(cache_path+'model.pt'))
+```
+
+```{python}
+# cached_model.eval()
+```
+
+```{python}
+# predict_hybrid = 'M0088/LH185'
+
+# def predict(predict_hybrid):
+#     # Requires:
+#     # - (input) predict_hybrid
+#     # - phno
+#     # - obs_geno_lookup
+#     # - ACGT
+#     # - cached_model
+    
+#     phno_idx = min(phno.loc[(phno.Hybrid == predict_hybrid), ].index)
+#     geno_idx = obs_geno_lookup.loc[phno_idx, 'Geno_Idx']
+#     g_in = torch.from_numpy(ACGT[geno_idx]).to(torch.float)[None,]
+
+#     with torch.no_grad():
+#         y_out = cached_model(g_in)
+        
+#     return(y_out)
+
+# float(predict(predict_hybrid = 'M0088/LH185'))
+```
+
+```{python}
+# import gradio as gr
+# gr.Interface(fn=predict, 
+#              inputs=gr.Textbox(type="text"),
+#              outputs=gr.Number(),
+#              examples=['M0088/LH185']).launch()
+```
+
+## Work out additional model templates
+
+Make better indices
+
+```{python}
+np.isnan(y_cs).sum()
+```
+
+```{python}
+len(y_cs)
+```
+
+```{python}
+phno
+```
+
+```{python}
+pct_cumsum_thresh = .9
+
+# make a df to aid in creating train/test splits
+# the plan is to shuffle the rows of the df, calculate the cumulative sum of the percents obs, then 
+# the entries above and below a given percent will be the train/test.
+obs_per_hybrid = phno.assign(n = 1).groupby('Hybrid').count().reset_index()
+obs_per_hybrid = obs_per_hybrid.loc[:, ['Hybrid', 'n']]
+obs_per_hybrid['pct'] = obs_per_hybrid.n / obs_per_hybrid.n.sum()
+obs_per_hybrid['pct_cumsum'] = np.nan
+obs_per_hybrid['random_order'] = 0
+
+obs_per_hybrid
+```
+
+```{python}
+# fill in the random values to sort on
+arr = np.arange(obs_per_hybrid.shape[0])
+np.random.shuffle(arr)
+obs_per_hybrid.random_order = arr
+
+obs_per_hybrid = obs_per_hybrid.sort_values('random_order')
+obs_per_hybrid['pct_cumsum'] = obs_per_hybrid.pct.cumsum()
+obs_per_hybrid
+```
+
+```{python}
+
+# Convert back into phno indices
+train_hybrids = list(obs_per_hybrid.loc[(obs_per_hybrid.pct_cumsum <= pct_cumsum_thresh), 'Hybrid'])
+test_hybrids  = list(obs_per_hybrid.loc[(obs_per_hybrid.pct_cumsum >  pct_cumsum_thresh), 'Hybrid'])
+
+train_idx = phno.loc[(phno.Hybrid.isin(train_hybrids)), ].index
+test_idx  = phno.loc[(phno.Hybrid.isin(test_hybrids)), ].index
+```
+
+```{python}
+[len(train_idx), len(test_idx)]
+```
+
+
+
+
+### One hot parent matrix
+
+```{python}
+GMat.shape
+```
+
+```{python}
+# almost no changes needed relative to ACGTDataset. 
+# What needs to change is that we can lookup entries directly from idx_original and the dim of self.G
+class GMatDataset(Dataset):
+    def __init__(self, 
+                 y, 
+                 G, # not on gpu
+                 idx_original,
+#                  idx_lookup,
+                 transform = None, target_transform = None,
+                 use_gpu_num = 0,
+                 **kwargs # use to allow for cpu to be passed into function 
+                ):
+        if 'device' in kwargs.keys():
+            pass
+        else:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            if use_gpu_num in [0, 1]: 
+                torch.cuda.set_device(use_gpu_num)
+        print(f"Using {device} device")
+        self.device = device
+        
+        self.y = y 
+        self.G = G
+        self.idx_original = idx_original
+#         self.idx_lookup = idx_lookup
+        self.transform = transform
+        self.target_transform = target_transform    
+        
+    def __len__(self):
+        return len(self.y)
+    
+    def __getitem__(self, idx):
+        y_idx =self.y[idx]
+        g_idx = self.G[idx, :] 
+        
+        # send all to gpu
+        if (self.device != 'cpu'):
+            if y_idx.device.type == 'cpu':
+                y_idx = y_idx.to(device)                 
+            if g_idx.device.type == 'cpu':
+                g_idx = g_idx.to(device) 
+        
+        if self.transform:
+            g_idx = self.transform(g_idx)
+            
+        if self.target_transform:
+            y_idx = self.transform(y_idx)
+        return g_idx, y_idx
+
+
+training_dataloader = DataLoader(
+    GMatDataset(y = torch.from_numpy(y_cs[train_idx])[:, None].to(torch.float), 
+                G = torch.from_numpy(GMat).to(torch.float), 
+                idx_original = torch.from_numpy(np.array(train_idx)),
+                use_gpu_num = 0
+               ),
+    batch_size = 50,
+    shuffle = True
+)
+
+testing_dataloader = DataLoader(
+    GMatDataset(y = torch.from_numpy(y_cs[test_idx])[:, None].to(torch.float), 
+                G = torch.from_numpy(GMat).to(torch.float),
+                idx_original = torch.from_numpy(np.array(test_idx)),
+                use_gpu_num = 0
+               ),
+    batch_size = 50,
+    shuffle = True
+)
+```
+
+
+
+```{python}
+class NeuralNetwork(nn.Module):
+    def __init__(self):
+        super(NeuralNetwork, self).__init__()    
+
+        def Linear_block(in_size, out_size, drop_pr):
+            block = nn.Sequential(
+                nn.Linear(in_size, out_size),
+                nn.ReLU(),
+                nn.Dropout(drop_pr)
+            )
+            return(block)         
+        
+        self.x_network = nn.Sequential(
+            Linear_block(in_size = 2250, out_size = 512, drop_pr = 0.5),
+            Linear_block(in_size = 512, out_size = 256, drop_pr = 0.5),
+            Linear_block(in_size = 256, out_size = 128, drop_pr = 0.5),
+            Linear_block(in_size = 128, out_size = 32, drop_pr = 0.5),
+            Linear_block(in_size = 32, out_size = 16, drop_pr = 0.5),
+            nn.Linear(16, 1)
+        
+        )
+        
+    def forward(self, x):
+        x_out = self.x_network(x)
+        return x_out
+
+model = NeuralNetwork().to(device)
+
+model(next(iter(training_dataloader))[0][0:5])
+```
+
+```{python}
+model, loss_df = train_nn(
+    cache_path,
+    training_dataloader,
+    testing_dataloader,
+    model,
+    learning_rate = 1e-3,
+    batch_size = 50, #dataloader_batch_size,
+    epochs = 5 #(run_epochs - epochs_run)
+)
+
+loss_df
+```
+
+
+
+
+
+###  Convolutional on 4xn
+
+```{python}
+# uses ACGTDataset above
+training_dataloader = DataLoader(
+    ACGTDataset(y = torch.from_numpy(y_cs[train_idx])[:, None].to(torch.float), 
+                G = torch.from_numpy(ACGT).to(torch.float), 
+#                 G = torch.from_numpy(ACGT).to(torch.float32), 
+                idx_original = torch.from_numpy(np.array(train_idx)),
+                idx_lookup   = torch.from_numpy(np.asarray(obs_geno_lookup)),
+                use_gpu_num = 0
+               ),
+    batch_size = 50,
+    shuffle = True
+)
+
+testing_dataloader = DataLoader(
+    ACGTDataset(y = torch.from_numpy(y_cs[test_idx])[:, None].to(torch.float), 
+                G = torch.from_numpy(ACGT).to(torch.float), 
+#                 G = torch.from_numpy(ACGT).to(torch.float32), 
+                idx_original = torch.from_numpy(np.array(test_idx)),
+                idx_lookup   = torch.from_numpy(np.asarray(obs_geno_lookup)),
+                use_gpu_num = 0
+               ),
+    batch_size = 50,
+    shuffle = True
+)
+```
+
+```{python}
+#I would like this to be stored in cache_path to make for easier re-instatiation, but it seems that
+# saving a text file and then calling eval() isn't recommended. Pytorch can write the weights with 
+# the class (sort of) but that is not advisable either because 
+# "pickle does not save the model class itself. Rather, it saves a path to the file containing the 
+# class, ... your code can break in various ways when used in other projects or after refactors."
+# https://pytorch.org/tutorials/beginner/saving_loading_models.html#save-load-entire-model
+
+class NeuralNetwork(nn.Module):
+    def __init__(self):
+        super(NeuralNetwork, self).__init__()    
+        self.x_network = nn.Sequential(
+            nn.Flatten(),
+            nn.ReLU(),
+            nn.Linear(4*125891, 16),
+            nn.ReLU(),
+            nn.Linear(16, 1)
+        )
+        
+    def forward(self, x):
+        x_out = self.x_network(x)
+        return x_out
+    
+model = NeuralNetwork().to(device)
+model(next(iter(training_dataloader))[0][0:5])
+```
+
+
+
+### Convolutional on Hilbert
+
+```{python}
+ACGT_hilb.shape
+```
+
+```{python}
+training_dataloader = DataLoader(
+    ACGTDataset(y = torch.from_numpy(y_cs[train_idx])[:, None].to(torch.float), 
+                G = torch.from_numpy(ACGT_hilb).to(torch.float), 
+                idx_original = torch.from_numpy(np.array(train_idx)),
+                idx_lookup   = torch.from_numpy(np.asarray(obs_geno_lookup)),
+                use_gpu_num = 0
+               ),
+    batch_size = 50,
+    shuffle = True
+)
+
+testing_dataloader = DataLoader(
+    ACGTDataset(y = torch.from_numpy(y_cs[test_idx])[:, None].to(torch.float), 
+                G = torch.from_numpy(ACGT_hilb).to(torch.float), 
+                idx_original = torch.from_numpy(np.array(test_idx)),
+                idx_lookup   = torch.from_numpy(np.asarray(obs_geno_lookup)),
+                use_gpu_num = 0
+               ),
+    batch_size = 50,
+    shuffle = True
+)
+```
+
+```{python}
+next(iter(training_dataloader))[0].shape
+```
+
+```{python}
+class NeuralNetwork(nn.Module):
+    def __init__(self):
+        super(NeuralNetwork, self).__init__()    
+        self.x_network = nn.Sequential(
+            nn.Flatten(),
+            nn.ReLU(),
+            nn.Linear(4*256*512, 16),
+            nn.ReLU(),
+            nn.Linear(16, 1)
+        )
+        
+    def forward(self, x):
+        x_out = self.x_network(x)
+        return x_out
+    
+    
+model = NeuralNetwork().to(device)
+# model(next(iter(training_dataloader))[0][0:5])
+model(next(iter(training_dataloader))[0]).shape
+```
+
+```{python}
+model, loss_df = train_nn(
+    cache_path,
+    training_dataloader,
+    testing_dataloader,
+    model,
+    learning_rate = 1e-3,
+    batch_size = 50, #dataloader_batch_size,
+    epochs = 2 #(run_epochs - epochs_run)
+)
+
+loss_df
+```
+
+
+
+
+
+
+
+

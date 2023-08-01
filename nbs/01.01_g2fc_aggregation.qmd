@@ -1,0 +1,528 @@
+---
+title: Aggregate Data G2F Competition Data.
+jupyter: python3
+---
+
+
+> This notebook adapts the approach I used when cleaning the aggregated g2f data for the G2F competition [see this Zenodo repository](https://zenodo.org/record/7830071). This one aims to accomplish the same end goal but also to produce a database that could be used by others or other projects of my own.
+
+
+```{python}
+import os
+import numpy as np
+import pandas as pd
+pd.set_option('display.max_columns', None)
+
+import sqlite3
+
+# https://www.earthdatascience.org/tutorials/introduction-to-leaflet-animated-maps/
+import folium
+from folium.plugins import MarkerCluster
+
+from EnvDL.core import *
+# import EnvDL.core
+
+# EnvDL.core.fo
+```
+
+```{python}
+cache_path = '../nbs_artifacts/01.01_g2fc_aggregation/'
+```
+
+# Data Aggregation
+
+```{python}
+train_dir= "../data_ext/zma/g2fc/Training_Data/"
+test_dir = "../data_ext/zma/g2fc/Testing_Data/"
+```
+
+```{python}
+# Aggregate train/test into a single set of dfs
+# phenotype/trait
+x_train = pd.read_csv(train_dir+'1_Training_Trait_Data_2014_2021.csv')
+x_test = pd.read_csv(test_dir+'1_Submission_Template_2022.csv')
+# If user has access to 2022 data, overwrite missing values
+if os.path.exists(test_dir+'Final_Observed_Yield.csv'):
+    x_test = x_test.drop(columns='Yield_Mg_ha').merge(pd.read_csv(test_dir+'Final_Observed_Yield.csv'), how = 'outer')
+    
+phno = x_train.merge(x_test, "outer")
+
+# metadata
+# I've manually resaved this csv as an xlsx to get around this error with the csv:
+# UnicodeDecodeError: 'utf-8' codec can't decode byte 0xca in position 5254: invalid continuation byte
+x_train = pd.read_excel(train_dir+'2_Training_Meta_Data_2014_2021.xlsx') 
+x_test = pd.read_csv(test_dir+'2_Testing_Meta_Data_2022.csv')
+x_test['Date_weather_station_placed'] = pd.to_datetime(x_test.Date_weather_station_placed)
+x_test['Date_weather_station_removed'] = pd.to_datetime(x_test.Date_weather_station_removed)
+# to string
+for e in ['Weather_Station_Serial_Number (Last four digits, e.g. m2700s#####)',
+          'Issue/comment_#5', 
+          'Issue/comment_#6', 
+          'Comments']:
+    x_test[e] = x_test[e].astype(str)
+meta = x_train.merge(x_test, how = "outer")
+
+# soil
+x_train = pd.read_csv(train_dir+'3_Training_Soil_Data_2015_2021.csv')
+x_test = pd.read_csv(test_dir+'3_Testing_Soil_Data_2022.csv')
+
+for e in ['E Depth',
+ 'lbs N/A',
+ 'Potassium ppm K',
+ 'Calcium ppm Ca',
+ 'Magnesium ppm Mg',
+ 'Sodium ppm Na',
+ '%H Sat',
+ '%K Sat',
+ '%Ca Sat',
+ '%Mg Sat',
+ '%Na Sat',
+ 'Mehlich P-III ppm P']:
+    x_test[e] = x_test[e].astype(float)
+
+x_test['Comments'] = x_test['Comments'].astype(str)
+soil = x_train.merge(x_test, how = "outer")
+
+
+# weather
+x_train = pd.read_csv(train_dir+'4_Training_Weather_Data_2014_2021.csv')
+x_test = pd.read_csv(test_dir+'4_Testing_Weather_Data_2022.csv')
+wthr = x_train.merge(x_test, how = "outer")
+
+
+# genomic
+# TODO
+# geno
+# x_train = pd.read_csv(train_dir+'All_hybrid_names_info.csv')
+# "./data/Maize_GxE_Competition_Data/Training_Data"
+# '5_Genotype_Data_All_Years.vcf.zip',
+# '6_Training_EC_Data_2014_2021.csv',
+# 'All_hybrid_names_info.csv',
+# 'GenoDataSources.txt'
+
+# crop growth model variables (enviromental covariates)
+x_train = pd.read_csv(train_dir+'6_Training_EC_Data_2014_2021.csv')
+x_test = pd.read_csv(test_dir+'6_Testing_EC_Data_2022.csv')
+cgmv = x_train.merge(x_test, how = "outer")
+```
+
+```{python}
+# Changes involving only 1 data frame =======================================
+# meta
+meta.Date_Planted = pd.to_datetime(meta.Date_Planted)
+
+# phno
+# object to datetime
+phno.Date_Planted = pd.to_datetime(phno.Date_Planted)
+phno.Date_Harvested = pd.to_datetime(phno.Date_Harvested)
+
+# infer from Env so that there are no missing years and this column can be an int.
+replace_Year = phno.Env.str.split('_', expand = True)
+replace_Year = replace_Year[1]
+phno.Year = replace_Year
+```
+
+```{python}
+# Check to make sure there are no missing values for these
+assert [] == [e for e in list(cgmv) if 0 != np.mean(cgmv[e].isna())]
+```
+
+```{python}
+# Changes involving _2_ data frames =========================================
+
+# phno and meta share 'Plot_Area_ha', 'Date_Planted' these need to be checked for consistency and moved. 
+# use meta to fill in pheno then drop
+# meta has the information from 22 and nothing else. Reverse for phno
+starting_missing = [sum(pd.isna(phno[e])) for e in ['Plot_Area_ha', 'Date_Planted']]
+
+for e in ['Plot_Area_ha', 'Date_Planted']:
+    mask = phno[e].isna()
+    fill_ins = phno.loc[mask, ['Env']].drop_duplicates().reset_index()
+
+    # for all the unique key combinations find the value that should be inserted and do so.
+    for i in range(fill_ins.shape[0]):
+        phno_mask = (phno.Env == fill_ins.loc[i,"Env"])
+
+        meta_mask = (meta.Env == fill_ins.loc[i,"Env"])
+        
+        insert_val = list(meta.loc[meta_mask, e])
+        insert_val = [e for e in insert_val if e == e] # get rid of nans 
+        
+        if insert_val == []:
+            pass
+        else:
+            assert len(insert_val) == 1 # check that there's only one value to imput
+            phno.loc[phno_mask, e] = insert_val[0]
+            
+ending_missing = [sum(pd.isna(phno[e])) for e in ['Plot_Area_ha', 'Date_Planted']]   
+print('\n'.join([
+    ('Missing in '+['Plot_Area_ha', 'Date_Planted'][i]+': '+
+     str(starting_missing[i])+' -> '+
+     str(ending_missing[i])) for i in range(2)]))
+```
+
+```{python}
+# Confirm there is no information in meta that is not in phno before dropping.
+
+for e in ['Plot_Area_ha', 'Date_Planted']:
+    phno_distinct = phno.loc[:, ['Env', e]].drop_duplicates().copy()
+    meta_distinct = meta.loc[:, ['Env', e]].drop_duplicates().copy()
+    phno_distinct['phno'] = 1.0
+    meta_distinct['meta'] = 1.0
+
+    #  compare
+    comp_distinct = phno_distinct.merge(meta_distinct, how = 'outer')
+    comp_distinct = comp_distinct.loc[(
+        pd.notna(comp_distinct[e]) &
+        comp_distinct.phno.isna()
+                      ), ]
+    # There should be no rows where ther is a value for meta but not phno.
+    assert comp_distinct.shape[0] == 0
+    
+meta = meta.drop(columns=['Plot_Area_ha', 'Date_Planted'])
+```
+
+## Misc. Column Rearranging and Cleaning
+
+```{python}
+# For the database's initial release I have a policy of maximal data inclusion
+
+# rm_Envs = ['GEH1_2020', 'GEH1_2021', 'GEH1_2019' # Germany locations
+# #           'ARH1_2016', 'ARH2_2016' # Only in 2016, missing soil data
+#           ]
+
+# phno = phno.loc[~phno.Env.isin(rm_Envs), :]
+# meta = meta.loc[~meta.Env.isin(rm_Envs), :]
+# soil = soil.loc[~soil.Env.isin(rm_Envs), :]
+# wthr = wthr.loc[~wthr.Env.isin(rm_Envs), :]
+# cgmv = cgmv.loc[~cgmv.Env.isin(rm_Envs), :]
+```
+
+```{python}
+# Fix types: object to datetime
+# phno.Date_Planted = pd.to_datetime(phno.Date_Planted)
+# phno.Date_Harvested = pd.to_datetime(phno.Date_Harvested)
+```
+
+```{python}
+# drop and redo year and Env
+meta = meta.drop(columns = 'Year')
+soil = soil.drop(columns = 'Year')
+
+temp = pd.DataFrame(phno['Env']).drop_duplicates().reset_index().drop(columns = 'index')
+temp['Env2'] = temp['Env']
+
+
+temp = sanitize_col(
+    df = temp, 
+    col = 'Env2', 
+    simple_renames= {
+    'MOH1_1_2018': 'MOH1-1_2018', 
+    'MOH1_2_2018': 'MOH1-2_2018', 
+    'MOH1_1_2020': 'MOH1-1_2020', 
+    'MOH1_2_2020': 'MOH1-2_2020'
+    }, 
+    split_renames= {})
+
+
+assert [] == [e for e in list(temp['Env2']) if len(e.split('_')) != 2]
+temp[["Experiment_Code", "Year"]] = temp['Env2'].str.split('_',expand=True)
+temp = temp.drop(columns = ['Experiment_Code'])
+```
+
+```{python}
+phno = temp.merge(phno).drop(columns = ['Env']).rename(columns = {'Env2':'Env'}).copy()
+meta = temp.merge(meta).drop(columns = ['Env']).rename(columns = {'Env2':'Env'}).copy()
+soil = temp.merge(soil).drop(columns = ['Env']).rename(columns = {'Env2':'Env'}).copy()
+wthr = temp.merge(wthr).drop(columns = ['Env']).rename(columns = {'Env2':'Env'}).copy()
+cgmv = temp.merge(cgmv).drop(columns = ['Env']).rename(columns = {'Env2':'Env'}).copy()
+```
+
+```{python}
+(find_df_shared_cols(phno, meta),
+ find_df_shared_cols(phno, soil),
+ find_df_shared_cols(phno, wthr),
+ find_df_shared_cols(phno, cgmv))
+```
+
+## Add in missing Enviroments
+confirm there are envs/gps coordinates for everyone
+
+```{python}
+phno_Envs = list(set(phno['Env']))
+meta_Envs = list(set(meta['Env']))
+soil_Envs = list(set(soil['Env']))
+wthr_Envs = list(set(wthr['Env']))
+cgmv_Envs = list(set(cgmv['Env']))
+
+all__Envs = list(set(phno_Envs+soil_Envs+wthr_Envs+cgmv_Envs))
+
+def get_missing_envs(data_Envs = []):
+    return([e for e in all__Envs if e not in data_Envs])
+
+phno_Envs_miss = get_missing_envs(data_Envs = phno_Envs)
+meta_Envs_miss = get_missing_envs(data_Envs = meta_Envs)
+soil_Envs_miss = get_missing_envs(data_Envs = soil_Envs)
+wthr_Envs_miss = get_missing_envs(data_Envs = wthr_Envs)
+cgmv_Envs_miss = get_missing_envs(data_Envs = cgmv_Envs)
+```
+
+```{python}
+phno_Envs_miss = phno.loc[phno.Env.isin(phno_Envs_miss), ['Env']].assign(i = 1).groupby('Env').count().reset_index()
+meta_Envs_miss = meta.loc[phno.Env.isin(meta_Envs_miss), ['Env']].assign(i = 1).groupby('Env').count().reset_index()
+soil_Envs_miss = soil.loc[phno.Env.isin(soil_Envs_miss), ['Env']].assign(i = 1).groupby('Env').count().reset_index()
+wthr_Envs_miss = wthr.loc[phno.Env.isin(wthr_Envs_miss), ['Env']].assign(i = 1).groupby('Env').count().reset_index()
+cgmv_Envs_miss = cgmv.loc[phno.Env.isin(cgmv_Envs_miss), ['Env']].assign(i = 1).groupby('Env').count().reset_index()
+
+phno_Envs_miss.shape != 0 
+```
+
+```{python}
+# Write out to be imputed envs / wholely absent envs
+if 0 != phno_Envs_miss.shape[0]:
+    phno_Envs_miss.to_csv(cache_path+'phno_Envs_miss.csv', index=False)
+if 0 != meta_Envs_miss.shape[0]:
+    meta_Envs_miss.to_csv(cache_path+'meta_Envs_miss.csv', index=False)
+if 0 != soil_Envs_miss.shape[0]:
+    soil_Envs_miss.to_csv(cache_path+'soil_Envs_miss.csv', index=False)
+if 0 != wthr_Envs_miss.shape[0]:
+    wthr_Envs_miss.to_csv(cache_path+'wthr_Envs_miss.csv', index=False)
+if 0 != cgmv_Envs_miss.shape[0]:
+    cgmv_Envs_miss.to_csv(cache_path+'cgmv_Envs_miss.csv', index=False)
+```
+
+```{python}
+assert 0 == phno_Envs_miss.shape[0]
+assert 0 == meta_Envs_miss.shape[0]
+```
+
+```{python}
+add_envs = phno.loc[(phno.Env.isin(soil_Envs_miss)), ['Env', 'Year']].drop_duplicates()
+soil = soil.merge(add_envs, how = 'outer')
+soil_Envs_miss = get_missing_envs(data_Envs = list(set(soil['Env'])))
+```
+
+```{python}
+# FIXME there is a _really_ weird bug here. The above cell produces [], but when only when it's re-run. 
+# I don't think it should change...
+```
+
+```{python}
+# assert [] == soil_Envs_miss
+```
+
+```{python}
+add_envs = phno.loc[(phno.Env.isin(wthr_Envs_miss)), ['Env', 'Year']].drop_duplicates()
+add_envs = add_envs.merge(
+    wthr.loc[(wthr.Year.isin(list(set(add_envs['Year'])))), ['Year', 'Date']].drop_duplicates(),
+    how = 'outer'
+)
+wthr = wthr.merge(add_envs, how = 'outer')
+wthr_Envs_miss = get_missing_envs(data_Envs = list(set(wthr['Env']))).copy()
+```
+
+```{python}
+# assert [] == wthr_Envs_miss
+```
+
+```{python}
+add_envs = phno.loc[(phno.Env.isin(cgmv_Envs_miss)), ['Env', 'Year']].drop_duplicates()
+cgmv = cgmv.merge(add_envs, how = 'outer')
+cgmv_Envs_miss = get_missing_envs(data_Envs = list(set(cgmv['Env']))).copy()
+```
+
+```{python}
+# assert [] == cgmv_Envs_miss
+```
+
+## Reorganize columns
+
+```{python}
+# regroup phenotype and meta Columns
+df = phno.merge(meta)
+
+cols_for_phno = [
+    'Env',
+    'Year',
+    'Hybrid',
+    'Yield_Mg_ha',          #| <- Key target
+    'Stand_Count_plants',   #|- Possible intermediate prediction targets
+    'Pollen_DAP_days',      #|
+    'Silk_DAP_days',        #|
+    'Plant_Height_cm',      #|
+    'Ear_Height_cm',        #|
+    'Root_Lodging_plants',  #|
+    'Stalk_Lodging_plants', #|
+    'Grain_Moisture',       #|
+    'Twt_kg_m3']            #|
+
+cols_for_meta = [
+    'Env',
+    'Year',
+    #  'Field_Location',
+    #  'Experiment',
+    #  'Replicate',
+    #  'Block',
+    #  'Plot',
+    #  'Range',
+    #  'Pass',
+    'Hybrid',
+    #  'Hybrid_orig_name',
+    #  'Hybrid_Parent1',
+    #  'Hybrid_Parent2',
+    'Plot_Area_ha',     #|- Needs Imputation
+    'Date_Planted',     #|
+    'Date_Harvested',   #|
+    'Experiment_Code',
+    'Treatment',
+    'City',
+    'Farm',
+    'Field',
+    'Trial_ID (Assigned by collaborator for internal reference)', # 
+    'Soil_Taxonomic_ID and horizon description, if known',        # 32.2% complete
+    'Weather_Station_Serial_Number (Last four digits, e.g. m2700s#####)',
+    'Weather_Station_Latitude (in decimal numbers NOT DMS)',
+    'Weather_Station_Longitude (in decimal numbers NOT DMS)',
+    #  'Date_weather_station_placed',
+    #  'Date_weather_station_removed',
+    'Previous_Crop',
+    'Pre-plant_tillage_method(s)',
+    'In-season_tillage_method(s)',
+    'Type_of_planter (fluted cone; belt cone; air planter)',
+    'System_Determining_Moisture',
+    'Pounds_Needed_Soil_Moisture',
+    'Latitude_of_Field_Corner_#1 (lower left)',
+    'Longitude_of_Field_Corner_#1 (lower left)',
+    'Latitude_of_Field_Corner_#2 (lower right)',
+    'Longitude_of_Field_Corner_#2 (lower right)',
+    'Latitude_of_Field_Corner_#3 (upper right)',
+    'Longitude_of_Field_Corner_#3 (upper right)',
+    'Latitude_of_Field_Corner_#4 (upper left)',
+    'Longitude_of_Field_Corner_#4 (upper left)',
+    'Cardinal_Heading_Pass_1',
+    'Irrigated']
+
+cols_for_cmnt =[
+    'Env',
+    'Year',
+    'Issue/comment_#1',
+    'Issue/comment_#2',
+    'Issue/comment_#3',
+    'Issue/comment_#4',
+    'Issue/comment_#5',
+    'Issue/comment_#6',
+    'Comments']
+
+phno = df.loc[:, cols_for_phno]
+meta = df.loc[:, cols_for_meta]
+cmnt = df.loc[:, cols_for_cmnt]
+```
+
+```{python}
+# Deal with Issues/Comments
+# There's qualitative information we can get and additional weather data but 
+# not a lot that will be immediately useful
+cmnt = cmnt.drop_duplicates()
+cmnt = cmnt.melt(id_vars = ['Env', 'Year'])
+cmnt = cmnt.loc[(cmnt.value.notna()), :]
+cmnt = cmnt.loc[(cmnt.value != 'nan'), :]
+```
+
+## Meta (1/2) Impute GPS Coordinates
+
+ Fix Missing GPS Coordinates. Correct clearly wrong entries.
+
+```{python}
+# This site is missing a - on this longitude (but none of the others apparently)
+meta.loc[meta.Env == 'TXH1_2021', 'Longitude_of_Field_Corner_#3 (upper right)'
+        ] = (-1 * meta.loc[meta.Env == 'TXH1_2021', 'Longitude_of_Field_Corner_#3 (upper right)'])
+
+meta.loc[meta.Env == 'TXH1_2021', 'Longitude_of_Field_Corner_#4 (upper left)'
+        ] = (-1 * meta.loc[meta.Env == 'TXH1_2021', 'Longitude_of_Field_Corner_#4 (upper left)'])
+```
+
+```{python}
+# meta.loc[meta.Env == 'TXH1_2021', ]
+```
+
+```{python}
+# Fix GPS coordinates
+gps_cols = ['Latitude_of_Field_Corner_#1 (lower left)',
+'Latitude_of_Field_Corner_#2 (lower right)',
+'Latitude_of_Field_Corner_#3 (upper right)',
+'Latitude_of_Field_Corner_#4 (upper left)',
+            
+'Longitude_of_Field_Corner_#1 (lower left)',
+'Longitude_of_Field_Corner_#2 (lower right)',
+'Longitude_of_Field_Corner_#3 (upper right)',
+'Longitude_of_Field_Corner_#4 (upper left)',
+            
+'Weather_Station_Latitude (in decimal numbers NOT DMS)',
+'Weather_Station_Longitude (in decimal numbers NOT DMS)']
+
+
+gps = meta.loc[:, ['Env']+gps_cols]
+gps = gps.drop_duplicates().reset_index().drop(columns = 'index')
+```
+
+```{python}
+#Create the map
+my_map = folium.Map(location = [38.928745, -92.352163], # LatLon
+                    zoom_start = 13)
+
+color_dict = dict(zip(
+    [str(2014+i) for i in range(10)],
+    #2014       
+    ['darkred', 'red', 'lightred','pink', 'lightgray', 'white', 
+    #2020
+     'darkpurple','lightblue','cadetblue', 'darkblue'])) 
+
+for i in gps.index:
+    e = list(gps.loc[i, [
+        'Env', 
+        'Weather_Station_Latitude (in decimal numbers NOT DMS)', 
+        'Weather_Station_Longitude (in decimal numbers NOT DMS)']])
+
+    e_color = color_dict[e[0].split('_')[-1]]
+    
+    # check for nas
+    if 0 in [1 if ee == ee else 0 for ee in e]:
+        print(e[0]+' contains missing values!')
+    else:
+        folium.Marker((e[1], e[2]), 
+                      popup = e[0], 
+                      icon=folium.Icon(color=e_color)).add_to(my_map)
+
+my_map
+```
+
+# Save Out
+
+```{python}
+phno = phno.drop_duplicates().copy()
+meta = meta.drop_duplicates().copy()
+soil = soil.drop_duplicates().copy()
+wthr = wthr.drop_duplicates().copy()
+cgmv = cgmv.drop_duplicates().copy()
+cmnt = cmnt.drop_duplicates().copy()
+```
+
+```{python}
+with sqlite3.connect(cache_path+"/g2f_comp.sqlite") as con:
+    phno.to_sql('phno', con, if_exists='replace')
+    meta.to_sql('meta', con, if_exists='replace')
+    soil.to_sql('soil', con, if_exists='replace')
+    wthr.to_sql('wthr', con, if_exists='replace')
+    cgmv.to_sql('cgmv', con, if_exists='replace')
+    cmnt.to_sql('cmnt', con, if_exists='replace')
+```
+
+```{python}
+phno.to_csv(cache_path+'phno.csv')
+meta.to_csv(cache_path+'meta.csv')
+soil.to_csv(cache_path+'soil.csv')
+wthr.to_csv(cache_path+'wthr.csv')
+cgmv.to_csv(cache_path+'cgmv.csv')
+cmnt.to_csv(cache_path+'cmnt.csv')
+```
+

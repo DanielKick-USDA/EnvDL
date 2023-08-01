@@ -1,0 +1,312 @@
+---
+title: 'Filter to observed Genotypes, kegg genes'
+jupyter: python3
+---
+
+
+> 
+
+
+```{python}
+import os
+
+import numpy as np
+import pandas as pd
+pd.set_option('display.max_columns', None)
+
+import plotly.express as px
+
+import hilbertcurve
+from hilbertcurve.hilbertcurve import HilbertCurve
+
+from EnvDL.core import *
+# from EnvDL.kegg import *
+from EnvDL.dna import *
+```
+
+```{python}
+cache_path = '../nbs_artifacts/01.05_g2fc_demo_model/'
+ensure_dir_path_exists(dir_path = cache_path)
+```
+
+## Load phenotypic data to match
+
+```{python}
+load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
+phno = pd.read_csv(load_from+'phno3.csv')
+phno
+```
+
+```{python}
+# uniq_hybrids = list(set(phno.Hybrid))
+# uniq_hybrids[0:3]
+```
+
+```{python}
+# # check snp records and only keep phenotypes with snp data
+# snps_found = [exists_geno((taxa_to_filename(taxa = ith_hybrid))) for ith_hybrid in  uniq_hybrids]
+```
+
+```{python}
+# temp = pd.DataFrame(zip(uniq_hybrids, snps_found), columns=['Hybrid', 'SNPS'])
+# temp.loc[(temp.SNPS != True)]
+```
+
+```{python}
+# print('Genotypes flagged as missing that exist with different capitalization:')
+# missing_hybrids = temp.loc[(temp.SNPS != True), ['Hybrid']]
+# # quick check that some of these aren't just differing in capitalization
+# missing_hybrids_list = [e.replace('/', '__').lower() for e in list(missing_hybrids.Hybrid)]
+# print(
+#     [e for e in [e.lower for e in os.listdir('../data/zma/g2fc/genotypes/snps/')] if e in missing_hybrids_list]
+# )
+```
+
+```{python}
+# print(
+#     str(missing_hybrids.merge(phno, how = 'left').shape[0]
+#        )+' observations ('+str(round(100 * (missing_hybrids.merge(phno, how = 'left').shape[0]/phno.shape[0]), 3)
+#        )+'%) missing genotype.'
+# )
+```
+
+```{python}
+# # limit to phno with snp data
+# phno = temp.loc[(temp.SNPS == True)].merge(phno, how = 'left')
+# phno.to_csv(cache_path+'phno_geno_filter.csv', index=False)
+# phno
+```
+
+
+## Different ways to represent Genotype
+
+```{python}
+ith_hybrid = 'M0088/LH185'
+```
+
+```{python}
+res = get_geno(taxa_to_filename(taxa = ith_hybrid)) 
+res = res[1:] # drop taxa
+res[0:10]
+```
+
+###
+
+```{python}
+len(res)
+# px.imshow( res )
+```
+
+```{python}
+res = list_to_ACGT(in_seq = res)
+```
+
+```{python}
+px.imshow( res[0:20, ] )
+```
+
+```{python}
+res_hilb = np_2d_to_hilbert(
+    in_seq = res
+)
+```
+
+```{python}
+px.imshow( res_hilb[:, :, 0] )
+```
+
+```{python}
+px.imshow( res_hilb[:, :, 1] )
+```
+
+```{python}
+# using kegg
+```
+
+```{python}
+from EnvDL.kegg import *
+```
+
+
+
+
+
+```{python}
+geno_path = '../data/zma/g2fc/genotypes/'
+# Useful for converting between the physical location and site
+geno_site = pd.read_table(geno_path+'5_Genotype_Data_All_Years_Filter_SiteSummary.txt'
+                         ).rename(columns = {'Physical Position':'Position'})
+geno_site.head()
+```
+
+```{python}
+geno_site['kegg_index'] = np.nan
+```
+
+
+
+```{python}
+import pickle as pkl
+with open('../data/zma/kegg/kegg_gene_entries.pkl', 'rb') as handle:
+    kegg_gene_entries = pkl.load(handle)
+```
+
+```{python}
+# TODO
+# how should I deal with complements?
+```
+
+```{python}
+# takes in a position string, returns a list with [chromosome, start, stop, complement]
+def parse_kegg_position(POSITION = '7:2815028..2815922'):
+    import re
+    is_complement = False
+    if re.match('.+complement.+', POSITION):
+        is_complement = True
+        POSITION = POSITION.replace('complement(', '').replace(')', '')
+
+    POSITION = POSITION.replace(':', '..').split('..')
+#     POSITION = [int(e) for e in POSITION]
+    POSITION = POSITION+['complement' if is_complement else 'coding']
+    return(POSITION)
+```
+
+```{python}
+len(kegg_gene_entries)
+```
+
+```{python}
+# not all entries have positions and some are unknown
+kegg_gene_entries = [e for e in kegg_gene_entries if 'POSITION' in e.keys()]
+len(kegg_gene_entries)
+```
+
+```{python}
+kegg_gene_entries = [e for e in kegg_gene_entries if e['POSITION']!='Unknown']
+len(kegg_gene_entries)
+```
+
+```{python}
+kegg_gene_entry_positions = [parse_kegg_position(e['POSITION']) for e in kegg_gene_entries]
+```
+
+```{python}
+# drop Plastid genes
+is_Pltd = [True if e[0]=='Pltd' else False for e in kegg_gene_entry_positions]
+
+
+print([kegg_gene_entry_positions[i] for i in range(len(kegg_gene_entry_positions)) if is_Pltd[i] == True  ][0:3])
+
+
+kegg_gene_entries         = [kegg_gene_entries[i] for i in range(len(kegg_gene_entry_positions)
+                                                                ) if is_Pltd[i] != True  ]
+kegg_gene_entry_positions = [kegg_gene_entry_positions[i] for i in range(len(kegg_gene_entry_positions)
+                                                                        ) if is_Pltd[i] != True  ]
+
+len(kegg_gene_entries)
+```
+
+```{python}
+# all position entries must have 4 values
+is_right_len = [len(e) == 4 for e in kegg_gene_entry_positions]
+
+
+kegg_gene_entries         = [kegg_gene_entries[i] for i in range(len(kegg_gene_entry_positions)
+                                                                ) if is_right_len[i] ]
+kegg_gene_entry_positions = [kegg_gene_entry_positions[i] for i in range(len(kegg_gene_entry_positions)
+                                                                        ) if is_right_len[i] ]
+len(kegg_gene_entries)
+```
+
+```{python}
+for i in range(len(kegg_gene_entries)):
+    ith_chr, ith_loc_start, ith_loc_stop, ith_strand = kegg_gene_entry_positions[i]
+    mask = ((geno_site.Chromosome == int(ith_chr)
+                ) & (geno_site.Position >= int(ith_loc_start)
+                ) & (geno_site.Position <= int(ith_loc_stop)) )
+
+    geno_site.loc[mask, 'kegg_index'] = i
+```
+
+```{python}
+geno_site.loc[np.isnan(geno_site.kegg_index), 'kegg_index'] = -1
+geno_site.kegg_index = geno_site.kegg_index.astype(int)
+geno_site
+```
+
+```{python}
+temp = geno_site.groupby('kegg_index'
+                 ).count(
+                 ).reset_index(
+                 ).loc[:, ['kegg_index', 'Chromosome']
+                 ].rename(columns = {'Chromosome':'Count'})
+temp
+
+```
+
+```{python}
+print('Kegg entries with SNPs: '+str(temp[((temp.kegg_index != -1
+                                       ) & (temp.Count > 1))].shape[0]))
+```
+
+```{python}
+px.histogram(temp.loc[(temp.kegg_index != -1),], 
+             x = 'Count',
+            title= 'Observed SNPS per ')
+```
+
+```{python}
+print('Kegg entries with SNPs: '+str(temp[(temp.kegg_index != -1)].shape[0]))
+```
+
+```{python}
+temp = pd.DataFrame(
+    zip(
+        range(20),
+        [temp[((temp.kegg_index != -1) & (temp.Count > i))].shape[0] for i in range(20)]
+    ), columns=['MoreThanXSNPs', 'Genes'])
+
+temp.head()
+```
+
+```{python}
+# decrease appears to be log linear
+px.scatter(temp, x = 'MoreThanXSNPs', y = 'Genes', log_y= True)
+```
+
+
+```{python}
+kegg_index = 35628
+
+geno_site.loc[(geno_site.kegg_index == kegg_index)]
+```
+
+```{python}
+# kegg_gene_entries[kegg_index]
+```
+
+```{python}
+ith_seq = kegg_gene_entries[kegg_index]['NTSEQ']['seq']
+ith_seq
+```
+
+```{python}
+ith_chr, ith_loc_start, ith_loc_stop, ith_strand = kegg_gene_entry_positions[kegg_index]
+```
+
+```{python}
+len(ith_seq)
+```
+
+```{python}
+98444732-98449260
+```
+
+```{python}
+kegg_gene_entries[kegg_index]
+```
+
+```{python}
+px.scatter(geno_site.loc[(geno_site.kegg_index == kegg_index)], x = 'Position', y = 'Ref' )
+```
+

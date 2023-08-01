@@ -1,0 +1,446 @@
+---
+title: Data Prep
+jupyter: python3
+---
+
+```{python}
+import tqdm
+
+import numpy as np
+import pandas as pd
+pd.set_option('display.max_columns', None)
+
+from sklearn import preprocessing # LabelEncoder
+from sklearn.metrics import mean_squared_error # if squared=False; RMSE
+
+from EnvDL.core import *
+from EnvDL.dna import *
+```
+
+```{python}
+cache_path = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
+ensure_dir_path_exists(dir_path = cache_path)
+```
+
+```{python}
+load_from = '../nbs_artifacts/01.02_g2fc_imputation/'
+
+meta = pd.read_csv(load_from+'meta0.csv')
+# meta['Date_Planted'] = meta['Date_Planted'].astype(int)
+# meta['Date_Harvested'] = meta['Date_Harvested'].astype(int)
+phno = pd.read_csv(load_from+'phno0.csv')
+soil = pd.read_csv(load_from+'soil0.csv')
+wthr = pd.read_csv(load_from+'wthr0.csv')
+# wthrWide = pd.read_csv(load_from+'wthrWide0.csv')
+cgmv = pd.read_csv(load_from+'cgmv0.csv')
+```
+
+
+```{python}
+mask = ((phno.Yield_Mg_ha.notna())) # This used to allow for missing yield so long as they were in 
+# 2022. Now that the 2022 data is available they should be excluded.
+phno = phno.loc[mask, :].reset_index().drop(columns = 'index')
+phno = phno.loc[:, ['Env', 'Year', 'Hybrid', 'Yield_Mg_ha']]
+```
+
+
+
+## Prep CVs
+
+```{python}
+# YMat[phno.Year == 2021]
+```
+
+## Prep y
+
+```{python}
+YMat = np.array(phno.Yield_Mg_ha)
+```
+
+## Genomic data
+
+### ~~One Hot Encode G~~ Replaced by deduplicated version
+
+```{python}
+# temp = phno.loc[:, ['Env', 'Year', 'Hybrid', 'Yield_Mg_ha']]
+# temp = pd.concat([temp, temp.Hybrid.str.split('/', expand=True)], axis=1
+#         ).rename(columns = {0:'P0', 1:'P1'})
+# temp
+# uniq_parents = list(set(pd.concat([temp['P0'], temp['P1']])))
+```
+
+```{python}
+# abandoned grouping so that 'PHN11_PHW65_0107' and 'PHN11_PHW65_0260' are the same
+
+# search_str = 'PHN11_PHW65'
+# search_list = ['PH207_PHG47-17',
+#  '4N506',
+#  'BGEM-0157-N',
+#  'PHN11_PHW65_0107',
+#  'W10004_0013',
+#  'PHW65_MOG_0106',
+#  'PHN11_PHW65_0260',
+#  'PHN11_PHW65_0276',
+#  'MOG',
+#  'PHN11_PHW65-0514',
+#  'MO44_PHW65_0475']
+
+
+# res_list = [e for e in search_list if re.match(search_str+'[-|_]\d+', e)]
+
+# print(search_str, ':', res_list, ',')
+
+# # uniq_parents = [e for e in uniq_parents if e not in res_list]
+```
+
+```{python}
+# GMat = np.zeros([temp.shape[0], len(uniq_parents)])
+
+# for j in tqdm.tqdm(range(len(uniq_parents))):
+#     for parent in ['P0', 'P1']:
+#         mask = (temp[parent] == uniq_parents[j]) 
+#         GMat[temp.loc[mask, ].index, j] += 1
+```
+
+```{python}
+# # confirm there are two parents encoded for each observation
+# assert 2 == np.min(np.sum(GMat, axis = 1))
+```
+
+### Unique Genotypes (many to one lookup)
+There are huge data savings to be had from keeping only deduplciated genomic data in memory in the GPU. 
+
+```{python}
+uniq_hybrids = list(set(phno.Hybrid))
+uniq_hybrids[0:3]
+```
+
+```{python}
+# check snp records and only keep phenotypes with snp data
+snps_found = [exists_geno((taxa_to_filename(taxa = ith_hybrid))) for ith_hybrid in  uniq_hybrids]
+```
+
+```{python}
+temp = pd.DataFrame(zip(uniq_hybrids, snps_found), columns=['Hybrid', 'SNPS'])
+temp.loc[(temp.SNPS != True)]
+```
+
+```{python}
+import os
+```
+
+```{python}
+print('Genotypes flagged as missing that exist with different capitalization:')
+missing_hybrids = temp.loc[(temp.SNPS != True), ['Hybrid']]
+# quick check that some of these aren't just differing in capitalization
+missing_hybrids_list = [e.replace('/', '__').lower() for e in list(missing_hybrids.Hybrid)]
+print(
+    [e for e in [e.lower for e in os.listdir('../data/zma/g2fc/genotypes/snps/')] if e in missing_hybrids_list]
+)
+```
+
+```{python}
+print(
+    str(missing_hybrids.merge(phno, how = 'left').shape[0]
+       )+' observations ('+str(round(100 * (missing_hybrids.merge(phno, how = 'left').shape[0]/phno.shape[0]), 3)
+       )+'%) missing genotype.'
+)
+```
+
+```{python}
+# limit to phno with snp data
+phno_geno = temp.loc[(temp.SNPS == True)].merge(phno, how = 'left')
+phno_geno.to_csv(cache_path+'phno_geno_filter.csv', index=False)
+phno_geno
+```
+
+```{python}
+# restrict to observations with snp data
+phno_geno = phno.merge(phno_geno.loc[:, ['Hybrid', 'SNPS']].drop_duplicates(), how  = 'left')
+phno_geno = phno_geno.loc[(phno_geno.SNPS == True)].copy()
+phno_geno
+```
+
+```{python}
+assert phno_geno.Yield_Mg_ha.isna().sum() == 0
+```
+
+```{python}
+# produce the final lookup table
+```
+
+```{python}
+obs_lookup = phno_geno.loc[:, ['Hybrid']
+                             ].drop_duplicates(
+                             ).reset_index(
+                             ).rename(columns = {'index':'Is_Phno_Idx'}
+                             ).reset_index().rename(columns = {'index':'Geno_Idx'})
+# add in obs idx in phno
+obs_lookup = phno_geno.merge(obs_lookup).reset_index().rename(columns = {'index':'Phno_Idx'})
+obs_geno_lookup = obs_lookup.loc[: ,  ['Phno_Idx', 'Geno_Idx', 'Is_Phno_Idx']]
+obs_geno_lookup
+```
+
+```{python}
+#TODO save out obs_geno_lookup
+```
+
+### One Hot Encode G (Deduplicated)
+
+```{python}
+# right now GMat is 135793, 2250. After deduplicating this will become 4926, 2250. That's only 3.6%!
+# Doing this removes several hybrids so it's actually a little smaller 4926, 2203
+```
+
+```{python}
+obs_geno_lookup.head()
+```
+
+```{python}
+temp = obs_geno_lookup.drop(columns = 'Phno_Idx').drop_duplicates().reset_index(drop=True)
+
+mask = phno_geno.index.isin(list(obs_geno_lookup['Is_Phno_Idx'].drop_duplicates()))
+temp = phno_geno.loc[mask, ]#'Hybrid']
+temp = temp.reset_index(drop = True) # drop so that the index in the DataFrame and ndarray match
+temp
+```
+
+```{python}
+temp = pd.concat([temp, temp.Hybrid.str.split('/', expand=True)], axis=1
+        ).rename(columns = {0:'P0', 1:'P1'})
+
+uniq_parents = list(set(pd.concat([temp['P0'], temp['P1']])))
+```
+
+```{python}
+if os.path.exists(cache_path+'GMat.npy'):
+    GMat = np.load(cache_path+'GMat.npy')
+else:
+    GMat = np.zeros([temp.shape[0], len(uniq_parents)])
+
+    for j in tqdm.tqdm(range(len(uniq_parents))):
+        for parent in ['P0', 'P1']:
+            mask = (temp[parent] == uniq_parents[j]) 
+            GMat[temp.loc[mask, ].index, j] += 1
+            
+    np.save(cache_path+'GMat.npy', GMat)
+```
+
+```{python}
+# confirm there are two parents encoded for each observation
+assert 2 == np.min(np.sum(GMat, axis = 1))
+```
+
+### Nucleotides
+
+```{python}
+# Convert IUPAC codes into one hot
+# https://www.bioinformatics.org/sms/iupac.html
+IUPAC = ['unk', 'A', 'C', 'G', 'T', 'K', 'M', 'N', 'R', 'S', 'W', 'Y']
+IUPAC = dict(zip(IUPAC, [i for i in range(len(IUPAC))])) # begin with unk.
+IUPAC
+```
+
+```{python}
+put_cached_result(cache_path+'ACGT_OneHot_dict.pkl', IUPAC)
+```
+
+```{python}
+if os.path.exists(cache_path+'ACGT_OneHot.npy'):
+#     ACGT = np.load(cache_path+'ACGT_OneHot.npy')
+    pass
+else:
+    temp = obs_geno_lookup.drop(columns = 'Phno_Idx').drop_duplicates().reset_index(drop=True)
+
+    # use the first Hybrid to figure out what the length of the sequence is.
+    i = 0
+    phno_idx = temp.loc[i, 'Is_Phno_Idx']
+    ith_hybrid = phno.loc[phno_idx, 'Hybrid']
+    geno_seq_len = len(get_geno(taxa_to_filename(taxa = ith_hybrid))[1:])    
+
+    # setup ndarray to hold data
+    ACGT = np.ndarray(shape = (temp.shape[0],        # obs
+                               geno_seq_len,         # values
+                               len(IUPAC.keys())+1)) # channels
+
+    # This is inefficient but needs only to be run once.
+    # go over observations, channels, fill in values
+
+    for i in tqdm.tqdm(temp.index): 
+        phno_idx = temp.loc[i, 'Is_Phno_Idx']
+        ith_hybrid = phno.loc[phno_idx, 'Hybrid']
+        res = get_geno(taxa_to_filename(taxa = ith_hybrid)) 
+        res = res[1:] # drop taxa
+
+        res = [e.strip('\n') for e in res] # remove end of line
+
+        for key in IUPAC.keys():
+            IUPAC_mask = [True if e == key else False for e in res]
+            ACGT[i, 
+                 IUPAC_mask, 
+                 IUPAC[key]] = 1  
+
+    # Swap axes to match pytorch convention
+    ACGT = np.swapaxes(ACGT, 1, 2)
+
+    np.save(cache_path+'ACGT_OneHot.npy', ACGT)
+```
+
+### Nucleotide percents
+
+```{python}
+if os.path.exists(cache_path+'ACGT.npy'):
+#     ACGT = np.load(cache_path+'ACGT.npy')
+    pass
+else:
+    temp = obs_geno_lookup.drop(columns = 'Phno_Idx').drop_duplicates().reset_index(drop=True)
+
+    
+    # use the first Hybrid to figure out what the length of the sequence is.
+    i = 0
+    phno_idx = temp.loc[i, 'Is_Phno_Idx']
+    ith_hybrid = phno.loc[phno_idx, 'Hybrid']
+    geno_seq_len = len(get_geno(taxa_to_filename(taxa = ith_hybrid))[1:])    
+    
+    # setup ndarray to hold data
+    ACGT = np.ndarray(shape = (temp.shape[0], geno_seq_len, 4))
+
+    for i in tqdm.tqdm(temp.index):
+        phno_idx = temp.loc[i, 'Is_Phno_Idx']
+        ith_hybrid = phno.loc[phno_idx, 'Hybrid']
+        res = get_geno(taxa_to_filename(taxa = ith_hybrid)) 
+        res = res[1:] # drop taxa
+        res = list_to_ACGT(in_seq = res)
+        ACGT[i, :, :] = res[None, :, :]
+        
+    # Swap axes to match pytorch convention
+    # (4926, 125891, 4)
+    ACGT = np.swapaxes(ACGT, 1, 2)
+
+    # set missings to 0 
+    ACGT[np.isnan(ACGT)] = 0
+
+    np.save(cache_path+'ACGT.npy', ACGT)
+```
+
+### Hilbert Nucleotide percents
+
+```{python}
+if os.path.exists(cache_path+'ACGT_hilb.npy'):
+#     ACGT_hilb = np.load(cache_path+'ACGT_hilb.npy')
+    pass
+else:
+    ACGT_hilb = np_3d_to_hilbert( np.swapaxes(ACGT, 1, 2) ) # swap channels back to dim 2 before running
+
+    # ACGT_hilb.shape
+    # (4926, 256, 512, 4)
+    # Pytorch standard has channels second
+    ACGT_hilb = np.swapaxes(ACGT_hilb, 1, 3)
+    ACGT_hilb = np.swapaxes(ACGT_hilb, 2, 3)
+
+    # set missings to 0
+    ACGT_hilb[np.isnan(ACGT_hilb)] = 0
+
+    np.save(cache_path+'ACGT_hilb.npy', ACGT_hilb)
+```
+
+## Make S Matrix
+
+```{python}
+SMat = phno.loc[:, ['Env']].merge(soil.drop(columns = ['Unnamed: 0', 'Year'])).drop(columns = ['Env'])
+SMatNames = list(SMat)
+SMat = np.array(SMat)
+```
+
+## Prep W
+
+```{python}
+# Input: (N,Cin,Lin)(N,Cin,Lin) or (Cin,Lin)(Cin,Lin)
+```
+
+```{python}
+WMatNames = list(wthr.drop(columns = ['Unnamed: 0', 'Env', 'Year', 'Date', 'DOY']))
+WMat = np.zeros([   # Pytorch uses
+    phno.shape[0],  # N
+    len(WMatNames), # Cin
+    np.max(wthr.DOY)# Lin
+])
+```
+
+```{python}
+# loop through all obs, but only add each env once (add to all relevant obs)
+added_envs = []
+for i in tqdm.tqdm(phno.index):
+    env = phno.loc[i, 'Env']
+
+    if env in added_envs:
+        pass
+    else:
+        mask = (phno.Env == env)
+        WMat_idxs = phno.loc[mask, ].index
+
+        # selected data is transposed to match correct shape
+        wthr_mask = (wthr.Env == env)
+        WMat[WMat_idxs, :, :] = wthr.loc[wthr_mask, 
+                                   ].sort_values('DOY'
+                                   ).drop(columns = ['Unnamed: 0', 'Env', 
+                                                     'Year', 'Date', 'DOY']).T
+
+        added_envs += [env]
+```
+
+## Prep CGMV?
+
+```{python}
+MMatNames = list(cgmv.drop(columns = ['Unnamed: 0', 'Env', 'Year']))
+```
+
+```{python}
+MMat = np.zeros([   
+    phno.shape[0],  
+    len(MMatNames)
+])
+```
+
+```{python}
+# loop through all obs, but only add each env once (add to all relevant obs)
+added_envs = []
+for i in tqdm.tqdm(phno.index):
+    env = phno.loc[i, 'Env']
+
+    if env in added_envs:
+        pass
+    else:
+        mask = (phno.Env == env)
+        MMat_idxs = phno.loc[mask, ].index
+
+        # selected data is transposed to match correct shape
+        cgmv_mask = (cgmv.Env == env)
+        MMat[MMat_idxs, :] = cgmv.loc[cgmv_mask, 
+                                ].drop(columns = ['Unnamed: 0', 'Env', 'Year'])
+
+        added_envs += [env]
+```
+
+# Save data
+This will streamline model generation. I'll just need to load these files in and can directly begin modeling.
+
+```{python}
+np.save(cache_path+'GMatNames.npy', uniq_parents)
+np.save(cache_path+'SMatNames.npy', SMatNames)
+np.save(cache_path+'WMatNames.npy', WMatNames)
+np.save(cache_path+'MMatNames.npy', MMatNames)
+```
+
+```{python}
+phno.to_csv(cache_path+'phno.csv', index=False)
+```
+
+```{python}
+np.save(cache_path+'YMat.npy', YMat)
+np.save(cache_path+'GMat.npy', GMat)
+np.save(cache_path+'SMat.npy', SMat)
+np.save(cache_path+'WMat.npy', WMat)
+np.save(cache_path+'MMat.npy', MMat)
+```
+
