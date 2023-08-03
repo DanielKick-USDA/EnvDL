@@ -140,6 +140,55 @@ def put_cached_result(
                     )
 ```
 
+```{python}
+#| '0': e
+#| '1': x
+#| '2': p
+#| '3': o
+#| '4': r
+#| '5': t
+
+def remove_matching_files(
+    cache_path, # Directory to query
+    match_regex_list = ['.*\.pt', 'yhats\.csv', 'loss_df\.csv'], # List of regexes to match (okay if two regexes match the same entry)
+    dry_run = True # Print files to be deleted or delete them. 
+):
+    "Helper function to clear out cache. Remove files from a folder if they match one of a given set of regexes. Ignores directories in directory. Useful for clearing out model artifacts."
+    import os
+    import re
+    # if empty set is provided, match nothing.
+    if match_regex_list == []:
+        match_regex_list = ['']
+    
+    files_to_remove = [[e for e in os.listdir(cache_path) if re.match(match_regex, e)
+                       ] for match_regex in match_regex_list]
+    # make a (potential) list of lists into a flat list
+    new_list = []
+    for sub_list in files_to_remove:
+        new_list = new_list + sub_list
+    # ensure it's deduplicated in case two regexes match with the same item
+    files_to_remove = list(set(new_list))
+    # remove any directories from consideration
+    files_to_remove = [e for e in files_to_remove if os.path.isfile(cache_path+e)]
+    # sort to make output more pleasant
+    files_to_remove.sort()
+
+    if files_to_remove == []:
+        print('No files found to remove.')
+    else:
+        if dry_run:
+            print('Command would remove:')
+            print('\n'.join(files_to_remove))
+        else:
+            for file in files_to_remove:
+                os.remove(cache_path+file)
+
+# remove_matching_files(
+#     cache_path,
+#     match_regex_list = ['.*\.pt', 'yhats\.csv', 'loss_df\.csv'],
+#     dry_run = False
+# )
+```
 
 ## Functions for working with DataFrames, especially cleaning them
 

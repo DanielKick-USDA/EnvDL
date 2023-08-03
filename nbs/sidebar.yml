@@ -1,5 +1,58 @@
 website:
   sidebar:
     contents:
+      - index.qmd
       - index.ipynb
-      - 00_core.ipynb
+      - 00.00_core.html
+      - 00.00_core.ipynb
+      - 00.00_core.qmd
+      - 00.01_core_dlcf.ipynb
+      - 00.01_core_dlcf.qmd
+      - 00.01_core_dna.ipynb
+      - 00.01_core_dna.qmd
+      - 00.02_Deep_Learning_Convenience_Functions.ipynb
+      - 01.00_g2fc_core.html
+      - 01.00_g2fc_core.ipynb
+      - 01.00_g2fc_core.qmd
+      - 01.01_g2fc_aggregation.html
+      - 01.01_g2fc_aggregation.ipynb
+      - 01.01_g2fc_aggregation.qmd
+      - 01.02_g2fc_imputation.html
+      - 01.02_g2fc_imputation.ipynb
+      - 01.02_g2fc_imputation.qmd
+      - 01.03_g2fc_demo_model.html
+      - 01.03_g2fc_explore_genetic_data.html
+      - 01.03_g2fc_prep_matrices.html
+      - 01.03_g2fc_prep_matrices.ipynb
+      - 01.03_g2fc_prep_matrices.qmd
+      - 01.03_retrieve_env_db_entries.qmd
+      - 01.04_g2fc_explore_genetic_data-Copy1.html
+      - 01.05_g2fc_demo_model-Copy1.html
+      - 01.05_g2fc_demo_model.html
+      - 01.05_g2fc_filter_genotypes.ipynb
+      - 01.05_g2fc_filter_genotypes.qmd
+      - 01.10_g2fc_demo_model.html
+      - 01.10_g2fc_demo_model.ipynb
+      - 01.10_g2fc_demo_model.qmd
+      - 01.12_g2fc_demo_G_ACGT_OneHot.ipynb
+      - 01_zma_kegg_download.html
+      - 02.00_zma_kegg_download.html
+      - 02.00_zma_kegg_download.ipynb
+      - 02.00_zma_kegg_download.qmd
+      - 02.01_zma_retrieve_nucleotide_data.html
+      - section: dlgwas
+        contents:
+          - dlgwas/03_zma_trial.html
+          - dlgwas/09_Deep_Learning_Convenience_Functions.html
+          - dlgwas/09_Deep_Learning_Convenience_Functions.ipynb
+          - dlgwas/10_TianEtAl2011.html
+          - dlgwas/10_TianEtAl2011.ipynb
+          - dlgwas/11_TianEtAl2011_model_simple.html
+          - dlgwas/11_TianEtAl2011_model_simple.ipynb
+          - dlgwas/12_TianEtAl2011_model_simple_cnn1d.ipynb
+          - dlgwas/13_TianEtAl2011_model_G2PDeep.html
+          - dlgwas/13_TianEtAl2011_model_G2PDeep.ipynb
+          - dlgwas/14_TianEtAl2011_model_G2PDeep3ResBlocks.ipynb
+          - dlgwas/15_TianEtAl2011_model_G2PDeepHilbert.ipynb
+          - dlgwas/16_TianEtAl2011_model_G2PDeepHilbert_NoDropout.ipynb
+          - dlgwas/17_TianEtAl2011_model_G2PDeepHilbert_NoDropout_Multitarget.ipynb

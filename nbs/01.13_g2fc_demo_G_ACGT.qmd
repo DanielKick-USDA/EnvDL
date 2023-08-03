@@ -1,0 +1,359 @@
+---
+title: G only ACGT Probabilities
+jupyter: python3
+---
+
+
+> 
+
+
+```{python}
+# Hacky way to schedule. Here I'm setting these to sleep until the gpus should be free.
+# At the end of the notebooks  os._exit(00) will kill the kernel freeing the gpu. 
+#                          Hours to wait
+# import time; time.sleep( 6 * (60*60))
+```
+
+```{python}
+import os
+
+import numpy as np
+import pandas as pd
+pd.set_option('display.max_columns', None)
+
+import plotly.express as px
+import plotly.io as pio
+pio.templates.default = "plotly_white"
+
+import hilbertcurve
+from hilbertcurve.hilbertcurve import HilbertCurve
+
+from EnvDL.core import * # includes remove_matching_files
+from EnvDL.dna import *
+from EnvDL.dlfn import *
+
+from tqdm import tqdm
+```
+
+```{python}
+cache_path = '../nbs_artifacts/01.13_g2fc_demo_G_ACGT/'
+ensure_dir_path_exists(dir_path = cache_path)
+```
+
+## Load data
+
+```{python}
+load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
+# phno = pd.read_csv(load_from+'phno.csv')
+phno_geno = pd.read_csv(load_from+'phno_geno.csv')
+phno = phno_geno
+
+obs_geno_lookup = np.load(load_from+'obs_geno_lookup.npy') # Phno_Idx	Geno_Idx	Is_Phno_Idx
+YMat = np.load(load_from+'YMat.npy')
+# GMat = np.load(load_from+'GMat.npy')
+# ACGT_OneHot = np.load(load_from+'ACGT_OneHot.npy')
+ACGT = np.load(load_from+'ACGT.npy')
+# ACGT_hilb = np.load(load_from+'ACGT_hilb.npy')
+# SMat = np.load(load_from+'SMat3.npy')
+# WMat = np.load(load_from+'WMat3.npy')
+# MMat = np.load(load_from+'MMat3.npy')
+```
+
+```{python}
+# dataloader_batch_size = 8 #16 #64
+# run_epochs = 200
+
+use_gpu_num = 0
+
+# Imports --------------------------------------------------------------------
+import torch
+from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
+from torch import nn
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+if use_gpu_num in [0, 1]: 
+    torch.cuda.set_device(use_gpu_num)
+print(f"Using {device} device")
+```
+
+## One Hot Encoded
+
+```{python}
+rng = np.random.default_rng(9230473) # note, must use rng.shuffle(arr) below for this to take effect.
+```
+
+```{python}
+pct_cumsum_thresh = .9
+
+# make a df to aid in creating train/test splits
+# the plan is to shuffle the rows of the df, calculate the cumulative sum of the percents obs, then 
+# the entries above and below a given percent will be the train/test.
+obs_per_hybrid = phno.assign(n = 1).groupby('Hybrid').count().reset_index()
+obs_per_hybrid = obs_per_hybrid.loc[:, ['Hybrid', 'n']]
+obs_per_hybrid['pct'] = obs_per_hybrid.n / obs_per_hybrid.n.sum()
+obs_per_hybrid['pct_cumsum'] = np.nan
+obs_per_hybrid['random_order'] = 0
+
+obs_per_hybrid
+```
+
+```{python}
+# fill in the random values to sort on
+arr = np.arange(obs_per_hybrid.shape[0])
+rng.shuffle(arr)
+obs_per_hybrid.random_order = arr
+
+obs_per_hybrid = obs_per_hybrid.sort_values('random_order')
+obs_per_hybrid['pct_cumsum'] = obs_per_hybrid.pct.cumsum()
+obs_per_hybrid
+```
+
+```{python}
+# Convert back into phno indices
+train_hybrids = list(obs_per_hybrid.loc[(obs_per_hybrid.pct_cumsum <= pct_cumsum_thresh), 'Hybrid'])
+test_hybrids  = list(obs_per_hybrid.loc[(obs_per_hybrid.pct_cumsum >  pct_cumsum_thresh), 'Hybrid'])
+
+train_idx = phno.loc[(phno.Hybrid.isin(train_hybrids)), ].index
+test_idx  = phno.loc[(phno.Hybrid.isin(test_hybrids)), ].index
+```
+
+```{python}
+[len(train_idx), len(test_idx)]
+```
+
+```{python}
+# confirm all observation idxs are have genomic information
+assert [] == [e for e in list(train_idx)+list(test_idx) if e not in obs_geno_lookup[:, 0]]
+```
+
+```{python}
+YMat_cs = calc_cs(YMat[train_idx])
+y_cs = apply_cs(YMat, YMat_cs)
+```
+
+```{python}
+training_dataloader = DataLoader(
+    ACGTDataset(y = torch.from_numpy(y_cs[train_idx])[:, None].to(torch.float), 
+                G = torch.from_numpy(ACGT).to(torch.float), 
+                idx_original = torch.from_numpy(np.array(train_idx)),
+                idx_lookup   = torch.from_numpy(np.asarray(obs_geno_lookup)),
+                use_gpu_num = 0,
+                device = 'cuda'
+               ),
+    batch_size = 50,
+    shuffle = True
+)
+```
+
+```{python}
+testing_dataloader = DataLoader(
+    ACGTDataset(y = torch.from_numpy(y_cs[test_idx])[:, None].to(torch.float), 
+                G = torch.from_numpy(ACGT).to(torch.float), 
+                idx_original = torch.from_numpy(np.array(test_idx)),
+                idx_lookup   = torch.from_numpy(np.asarray(obs_geno_lookup)),
+                use_gpu_num = 0,
+                device = 'cuda'
+               ),
+    batch_size = 50,
+    shuffle = True
+)
+```
+
+```{python}
+next(iter(training_dataloader))[0].shape
+```
+
+```{python}
+class NeuralNetwork(nn.Module):
+    def __init__(self):
+        super(NeuralNetwork, self).__init__()    
+
+        def Linear_block(in_size, out_size, drop_pr):
+            block = nn.Sequential(
+                nn.Linear(in_size, out_size),
+                nn.ReLU(),
+                nn.Dropout(drop_pr)
+            )
+            return(block)         
+        
+        self.x_network = nn.Sequential(
+            nn.Flatten(),
+            Linear_block(in_size = 4*125891, out_size = 512, drop_pr = 0.3),
+            Linear_block(in_size = 512, out_size = 256, drop_pr = 0.3),
+            Linear_block(in_size = 256, out_size = 128, drop_pr = 0.3),
+            Linear_block(in_size = 128, out_size = 32, drop_pr = 0.3),
+            Linear_block(in_size = 32, out_size = 16, drop_pr = 0.3),
+            nn.Linear(16, 1)
+        )
+        
+    def forward(self, x):
+        x_out = self.x_network(x)
+        return x_out
+
+model = NeuralNetwork().to(device)
+
+model(next(iter(training_dataloader))[0][0:5])
+```
+
+```{python}
+# # small scale test
+# model, loss_df = train_nn(
+#     cache_path,
+#     training_dataloader,
+#     testing_dataloader,
+#     model,
+#     learning_rate = 1e-3,
+#     batch_size = 50, #dataloader_batch_size,
+#     epochs = 1 #(run_epochs - epochs_run)
+# )
+
+# loss_df
+```
+
+```{python}
+estimate_iterations(sec_per_it = 127)
+```
+
+```{python}
+# remove_matching_files(
+#     cache_path,
+#     match_regex_list = ['model\.pt'],
+#     dry_run = False
+# )
+```
+
+```{python}
+dataloader_batch_size = 50
+run_epochs = 100
+
+# don't run if either of these exist because there may be cases where we want the results but not the model
+import re
+
+if not os.path.exists(cache_path+'/model.pt'): 
+    # Shared setup (train from scratch and load latest)
+    model = NeuralNetwork()
+
+    # find the biggest model to save
+    saved_models = os.listdir(cache_path)
+    saved_models = [e for e in saved_models if re.match('model*', e)]
+
+    if saved_models == []:
+        epochs_run = 0
+    else:
+        saved_models = [e for e in saved_models if e != 'model.pt']
+        # if there are saved models reload and resume training
+        saved_models_numbers = [int(e.replace('model_', ''
+                                    ).replace('.pt', ''
+                                    ).split('_')[0]) for e in saved_models]
+        # saved_models
+        epochs_run = max(saved_models_numbers)+1 # add 1 to account for 0 index
+        latest_model = [e for e in saved_models if re.match(
+            '^model_'+str(epochs_run-1)+'_.*\.pt$', e)][0] # subtract 1 to convert back
+        model.load_state_dict(torch.load(cache_path+latest_model))
+        print('Resuming Training: '+str(epochs_run)+'/'+str(run_epochs)+' epochs run.')
+    
+    model.to(device)    
+
+    model, loss_df = train_nn(
+        cache_path,
+        training_dataloader,
+        testing_dataloader,
+        model,
+        learning_rate = 1e-3,
+        batch_size = dataloader_batch_size,
+        epochs = (run_epochs - epochs_run)
+    )
+    
+    # experimental outputs:
+    # 1. Model
+    torch.save(model.state_dict(), cache_path+'/model.pt') # convention is to use .pt or .pth
+
+    # 2. loss_df    
+    # If this is resuming training, load and extend the existing loss dataframe
+    if os.path.exists(cache_path+'/loss_df.csv'):
+        loss_df_on_disk = pd.read_csv(cache_path+'/loss_df.csv')
+        epoch_offset = 1 + loss_df_on_disk['Epoch'].max()
+        loss_df['Epoch'] = loss_df['Epoch'] + epoch_offset
+        loss_df = pd.concat([loss_df_on_disk, loss_df])
+    loss_df.to_csv(cache_path+'/loss_df.csv', index=False)  
+    
+    # 3. predictions 
+    yhats = pd.concat([
+        yhat_loop(testing_dataloader, model).assign(Split = 'Test'),
+        yhat_loop(training_dataloader, model).assign(Split = 'Train')], axis = 0)
+
+    yhats.to_csv(cache_path+'/yhats.csv', index=False)
+```
+
+### Standard Visualizations
+
+
+
+
+```{python}
+scale_dict = {'y1':YMat_cs}
+import plotly.graph_objects as go
+```
+
+```{python}
+naieve_yhat = training_dataloader.dataset.y.mean()
+
+naieve_MSE_Train = reverse_cs( 
+    np.array(((naieve_yhat - training_dataloader.dataset.y)**2)).mean(),
+    scale_dict['y1']
+)
+
+naieve_MSE_Test = reverse_cs( 
+    np.array(((naieve_yhat - testing_dataloader.dataset.y)**2)).mean(),
+    scale_dict['y1']
+)
+
+naieve_MSE_Train, naieve_MSE_Test
+
+
+
+loss_df = pd.read_csv(cache_path+'/loss_df.csv')
+
+loss_df.TrainMSE = reverse_cs(loss_df.TrainMSE, scale_dict['y1'])
+loss_df.TestMSE  = reverse_cs(loss_df.TestMSE , scale_dict['y1'])
+
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=loss_df.Epoch, y=loss_df.TestMSE,
+                    mode='lines', name='Test'))
+fig.add_trace(go.Scatter(x=loss_df.Epoch, y=loss_df.TrainMSE,
+                    mode='lines', name='Train'))
+
+fig.add_trace(go.Scatter(x=loss_df.Epoch, y=[naieve_MSE_Test  for e in range(len(loss_df.Epoch))], 
+                         mode='lines', name='Naieve Test'))
+fig.add_trace(go.Scatter(x=loss_df.Epoch, y=[naieve_MSE_Train for e in range(len(loss_df.Epoch))], 
+                         mode='lines', name='Naieve Train'))
+fig.show()
+```
+
+```{python}
+yhats = pd.read_csv(cache_path+'/yhats.csv')
+
+# px.scatter(yhats, x = 'y_true', y = 'y_pred', color = 'Split')
+```
+
+```{python}
+yhats.y_true = reverse_cs(yhats.y_true, scale_dict['y1'])
+yhats.y_pred = reverse_cs(yhats.y_pred, scale_dict['y1'])
+
+# px.scatter(yhats, x = 'y_true', y = 'y_pred', color = 'Split', trendline="ols")
+```
+
+```{python}
+yhats['Error'] = yhats.y_pred - yhats.y_true
+
+px.histogram(yhats, x = 'Error', color = 'Split',
+             marginal="box", # can be `rug`, `violin`
+             nbins= 50)
+```
+
+```{python}
+os._exit(00)
+```
+
