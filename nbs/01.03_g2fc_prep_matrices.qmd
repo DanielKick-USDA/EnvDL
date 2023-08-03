@@ -147,7 +147,6 @@ phno_geno
 phno_geno.to_csv(cache_path+'phno_geno.csv', index=False)
 ```
 
-
 ```{python}
 # and overwrite phno to prevent incomplete data from creeping in.
 phno = phno_geno.copy()
@@ -186,46 +185,6 @@ obs_env_lookup.to_csv(cache_path+'obs_env_lookup.csv', index=False)
 ```{python}
 YMat = np.array(phno_geno.Yield_Mg_ha)
 np.save(cache_path+'YMat.npy', YMat)
-```
-
-```{python}
-
-
-
-
-# phno_geno.drop_duplicates(
-#                              ).reset_index(
-#                              ).rename(columns = {'index':'Phno_Idx'})
-```
-
-```{python}
-# produce the final lookup table
-```
-
-```{python}
-# obs_lookup = phno_geno.loc[:, ['Hybrid']
-#                              ].drop_duplicates(
-#                              ).reset_index(
-#                              ).rename(columns = {'index':'Is_Phno_Idx'}
-#                              ).reset_index().rename(columns = {'index':'Geno_Idx'})
-# # add in obs idx in phno
-# obs_lookup = phno_geno.merge(obs_lookup).reset_index().rename(columns = {'index':'Phno_Idx'})
-# obs_geno_lookup = obs_lookup.loc[: ,  ['Phno_Idx', 'Geno_Idx', 'Is_Phno_Idx']]
-# obs_geno_lookup
-```
-
-```{python}
-# obs_geno_lookup
-```
-
-```{python}
-# # save out obs_geno_lookup
-# np.save(cache_path+'obs_geno_lookup.npy', np.asarray(obs_geno_lookup))
-# obs_geno_lookup.to_csv(cache_path+'obs_geno_lookup.csv', index=False)
-```
-
-```{python}
-
 ```
 
 ## Genomic Data
@@ -398,65 +357,6 @@ else:
 ### Make Environment to Observation Lookup 
 
 ```{python}
-# obs_geno_lookup
-```
-
-```{python}
-# phno_geno
-```
-
-```{python}
-# # working from phno_geno to ensure there is genetic data.
-# uniq_Env = phno_geno.loc[:, ['Env']].drop_duplicates(
-#                                    ).reset_index().rename(columns = {'index': 'Is_Phno_Idx'}
-#                                    ).reset_index().rename(columns = {'index': 'Is_Env_Idx'})
-# uniq_Env
-```
-
-```{python}
-# obs_env_lookup = phno_geno.merge(uniq_Env
-#                          ).reset_index().rename(columns = {'index': 'Phno_Idx'}
-#                          ).loc[:, ['Phno_Idx', 'Is_Env_Idx', 'Is_Phno_Idx']]
-# obs_env_lookup
-```
-
-```{python}
-# # confrim obs_env_lookup is set the way it should be.
-# temp = pd.concat([phno_geno.drop(columns = 'SNPS').reset_index(drop = True), # have to reset to correctly cbind these
-#                   obs_env_lookup], 
-#                  axis=1)
-
-# temp = temp.loc[:, ['Env', 'Is_Env_Idx']].drop_duplicates(
-#                                         ).assign(n = 1
-#                                         ).groupby(['Env'#, 'Is_Env_Idx'
-#                                                   ]
-#                                         ).count(
-#                                         ).reset_index()
-
-# temp
-```
-
-```{python}
-# assert 1 == max(temp.n)
-```
-
-
-```{python}
-# # save out obs_geno_lookup
-# np.save(cache_path+'obs_env_lookup.npy', np.asarray(obs_env_lookup))
-# obs_env_lookup.to_csv(cache_path+'obs_env_lookup.csv', index=False)
-```
-
-```{python}
-# # useful for making S, W Matricies
-# obs_env_lookup_small = obs_env_lookup.drop(columns = 'Phno_Idx').drop_duplicates().sort_values('Is_Env_Idx').reset_index(drop = True)
-
-# obs_env_lookup_small
-```
-
-
-
-```{python}
 obs_env_lookup_small = obs_env_lookup.drop(columns = 'Phno_Idx'
                                     ).drop_duplicates(
                                     ).sort_values('Env_Idx'
@@ -527,77 +427,16 @@ for i in tqdm.tqdm(obs_env_lookup_small.index):
                                          'Year', 'Date', 'DOY']).T
 ```
 
-```{python}
-# WMatNames = list(wthr.drop(columns = ['Unnamed: 0', 'Env', 'Year', 'Date', 'DOY']))
-# WMat = np.zeros([   # Pytorch uses
-#     phno.shape[0],  # N
-#     len(WMatNames), # Cin
-#     np.max(wthr.DOY)# Lin
-# ])
-```
-
-```{python}
-# # loop through all obs, but only add each env once (add to all relevant obs)
-# added_envs = []
-# for i in tqdm.tqdm(phno.index):
-#     env = phno.loc[i, 'Env']
-
-#     if env in added_envs:
-#         pass
-#     else:
-#         mask = (phno.Env == env)
-#         WMat_idxs = phno.loc[mask, ].index
-
-#         # selected data is transposed to match correct shape
-#         wthr_mask = (wthr.Env == env)
-#         WMat[WMat_idxs, :, :] = wthr.loc[wthr_mask, 
-#                                    ].sort_values('DOY'
-#                                    ).drop(columns = ['Unnamed: 0', 'Env', 
-#                                                      'Year', 'Date', 'DOY']).T
-
-#         added_envs += [env]
-```
-
 ## Prep CGMV?
 
 ```{python}
-# MMatNames = list(cgmv.drop(columns = ['Unnamed: 0', 'Env', 'Year']))
-```
+cgmv_Env = phno_geno.loc[:, ['Env', 'Env_Idx']
+                   ].drop_duplicates(
+                   ).merge(cgmv
+                   ).sort_values('Env_Idx'
+                   ).reset_index(
+                   ).drop(columns = ['index', 'Env', 'Env_Idx', 'Unnamed: 0', 'Year'])
 
-```{python}
-# MMat = np.zeros([   
-#     phno.shape[0],  
-#     len(MMatNames)
-# ])
-```
-
-```{python}
-# # loop through all obs, but only add each env once (add to all relevant obs)
-# added_envs = []
-# for i in tqdm.tqdm(phno.index):
-#     env = phno.loc[i, 'Env']
-
-#     if env in added_envs:
-#         pass
-#     else:
-#         mask = (phno.Env == env)
-#         MMat_idxs = phno.loc[mask, ].index
-
-#         # selected data is transposed to match correct shape
-#         cgmv_mask = (cgmv.Env == env)
-#         MMat[MMat_idxs, :] = cgmv.loc[cgmv_mask, 
-#                                 ].drop(columns = ['Unnamed: 0', 'Env', 'Year'])
-
-#         added_envs += [env]
-```
-
-```{python}
-phno_geno.loc[:, ['Env', 'Env_Idx']].merge(cgmv)
-```
-
-```{python}
-cgmv_Env = uniq_Env.merge(cgmv)
-cgmv_Env = cgmv_Env.drop(columns = ['Is_Env_Idx', 'Is_Phno_Idx', 'Env', 'Unnamed: 0', 'Year'])
 MMatNames = list(cgmv_Env)
 MMat = np.asarray(cgmv_Env)
 ```
@@ -609,10 +448,6 @@ This will streamline model generation. I'll just need to load these files in and
 np.save(cache_path+'SMatNames.npy', SMatNames)
 np.save(cache_path+'WMatNames.npy', WMatNames)
 np.save(cache_path+'MMatNames.npy', MMatNames)
-```
-
-```{python}
-# phno.to_csv(cache_path+'phno.csv', index=False)
 ```
 
 ```{python}
