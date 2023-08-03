@@ -39,8 +39,9 @@ cgmv = pd.read_csv(load_from+'cgmv0.csv')
 ```{python}
 mask = ((phno.Yield_Mg_ha.notna())) # This used to allow for missing yield so long as they were in 
 # 2022. Now that the 2022 data is available they should be excluded.
-phno = phno.loc[mask, :].reset_index().drop(columns = 'index')
+phno = phno.loc[mask, :].reset_index(drop = True)
 phno = phno.loc[:, ['Env', 'Year', 'Hybrid', 'Yield_Mg_ha']]
+phno = phno.drop_duplicates().reset_index(drop = True).copy()
 ```
 
 
@@ -51,15 +52,9 @@ phno = phno.loc[:, ['Env', 'Year', 'Hybrid', 'Yield_Mg_ha']]
 # YMat[phno.Year == 2021]
 ```
 
-## Prep y
+## Indexing
 
-```{python}
-YMat = np.array(phno.Yield_Mg_ha)
-```
-
-## Genomic data
-
-### Unique Genotypes (many to one lookup)
+### Filtered Phenotype and lookup
 There are huge data savings to be had from keeping only deduplciated genomic data in memory in the GPU. 
 
 ```{python}
@@ -102,14 +97,13 @@ print(
 ```{python}
 # limit to phno with snp data
 phno_geno = temp.loc[(temp.SNPS == True)].merge(phno, how = 'left')
-phno_geno.to_csv(cache_path+'phno_geno_filter.csv', index=False)
 phno_geno
 ```
 
 ```{python}
 # restrict to observations with snp data
 phno_geno = phno.merge(phno_geno.loc[:, ['Hybrid', 'SNPS']].drop_duplicates(), how  = 'left')
-phno_geno = phno_geno.loc[(phno_geno.SNPS == True)].copy()
+phno_geno = phno_geno.loc[(phno_geno.SNPS == True)].drop(columns = ['SNPS']).reset_index(drop=True).copy()
 phno_geno
 ```
 
@@ -118,22 +112,52 @@ assert phno_geno.Yield_Mg_ha.isna().sum() == 0
 ```
 
 ```{python}
-# produce the final lookup table
+# phno_geno.to_csv(cache_path+'phno_geno_filter.csv', index=False)
+
+phno_geno = phno_geno.reset_index().rename(columns = {'index':'Phno_Idx'})
 ```
 
 ```{python}
-obs_lookup = phno_geno.loc[:, ['Hybrid']
-                             ].drop_duplicates(
-                             ).reset_index(
-                             ).rename(columns = {'index':'Is_Phno_Idx'}
-                             ).reset_index().rename(columns = {'index':'Geno_Idx'})
-# add in obs idx in phno
-obs_lookup = phno_geno.merge(obs_lookup).reset_index().rename(columns = {'index':'Phno_Idx'})
-obs_geno_lookup = obs_lookup.loc[: ,  ['Phno_Idx', 'Geno_Idx', 'Is_Phno_Idx']]
-obs_geno_lookup
+Env_Idxs  = phno_geno.loc[:, ['Env']
+                    ].drop_duplicates(
+                    ).reset_index(drop = True
+                    ).reset_index(
+                    ).rename(columns = {'index':'Env_Idx'})
+Geno_Idxs = phno_geno.loc[:, ['Hybrid']
+                    ].drop_duplicates(
+                    ).reset_index(drop = True
+                    ).reset_index(
+                    ).rename(columns = {'index':'Geno_Idx'})
 ```
 
 ```{python}
+# This is key. I'm explictly adding an index column to fix frustrations jumping between sorted versions of the df.
+
+phno_geno = phno_geno.merge(Env_Idxs).merge(Geno_Idxs).sort_values('Phno_Idx').reset_index(drop = True)
+```
+
+```{python}
+phno_geno = phno_geno.loc[:, [ 'Env', 'Year', 'Hybrid', 'Yield_Mg_ha', 
+                              'Phno_Idx', 'Env_Idx', 'Geno_Idx']]
+
+phno_geno
+```
+
+```{python}
+phno_geno.to_csv(cache_path+'phno_geno.csv', index=False)
+```
+
+
+```{python}
+# and overwrite phno to prevent incomplete data from creeping in.
+phno = phno_geno.copy()
+```
+
+### Observation to Genotype
+
+```{python}
+uniq_geno = phno_geno.loc[:, ['Geno_Idx']].drop_duplicates().reset_index().rename(columns = {'index':'Is_Phno_Idx'})
+obs_geno_lookup = phno_geno.loc[:, ['Phno_Idx', 'Geno_Idx']].merge(uniq_geno).sort_values('Phno_Idx').reset_index(drop = True).copy()
 obs_geno_lookup
 ```
 
@@ -142,6 +166,69 @@ obs_geno_lookup
 np.save(cache_path+'obs_geno_lookup.npy', np.asarray(obs_geno_lookup))
 obs_geno_lookup.to_csv(cache_path+'obs_geno_lookup.csv', index=False)
 ```
+
+### Observation to Environment
+
+```{python}
+uniq_env = phno_geno.loc[:, ['Env_Idx']].drop_duplicates().reset_index().rename(columns = {'index':'Is_Phno_Idx'})
+obs_env_lookup = phno_geno.loc[:, ['Phno_Idx', 'Env_Idx']].merge(uniq_env).sort_values('Phno_Idx').reset_index(drop = True).copy()
+obs_env_lookup
+```
+
+```{python}
+# save out obs_geno_lookup
+np.save(cache_path+'obs_env_lookup.npy', np.asarray(obs_env_lookup))
+obs_env_lookup.to_csv(cache_path+'obs_env_lookup.csv', index=False)
+```
+
+## Y
+
+```{python}
+YMat = np.array(phno_geno.Yield_Mg_ha)
+np.save(cache_path+'YMat.npy', YMat)
+```
+
+```{python}
+
+
+
+
+# phno_geno.drop_duplicates(
+#                              ).reset_index(
+#                              ).rename(columns = {'index':'Phno_Idx'})
+```
+
+```{python}
+# produce the final lookup table
+```
+
+```{python}
+# obs_lookup = phno_geno.loc[:, ['Hybrid']
+#                              ].drop_duplicates(
+#                              ).reset_index(
+#                              ).rename(columns = {'index':'Is_Phno_Idx'}
+#                              ).reset_index().rename(columns = {'index':'Geno_Idx'})
+# # add in obs idx in phno
+# obs_lookup = phno_geno.merge(obs_lookup).reset_index().rename(columns = {'index':'Phno_Idx'})
+# obs_geno_lookup = obs_lookup.loc[: ,  ['Phno_Idx', 'Geno_Idx', 'Is_Phno_Idx']]
+# obs_geno_lookup
+```
+
+```{python}
+# obs_geno_lookup
+```
+
+```{python}
+# # save out obs_geno_lookup
+# np.save(cache_path+'obs_geno_lookup.npy', np.asarray(obs_geno_lookup))
+# obs_geno_lookup.to_csv(cache_path+'obs_geno_lookup.csv', index=False)
+```
+
+```{python}
+
+```
+
+## Genomic Data
 
 ### One Hot Encode G (Deduplicated)
 
@@ -306,7 +393,79 @@ else:
     np.save(cache_path+'ACGT_hilb.npy', ACGT_hilb)
 ```
 
-## Make S Matrix
+## Environmental Data
+
+### Make Environment to Observation Lookup 
+
+```{python}
+# obs_geno_lookup
+```
+
+```{python}
+# phno_geno
+```
+
+```{python}
+# # working from phno_geno to ensure there is genetic data.
+# uniq_Env = phno_geno.loc[:, ['Env']].drop_duplicates(
+#                                    ).reset_index().rename(columns = {'index': 'Is_Phno_Idx'}
+#                                    ).reset_index().rename(columns = {'index': 'Is_Env_Idx'})
+# uniq_Env
+```
+
+```{python}
+# obs_env_lookup = phno_geno.merge(uniq_Env
+#                          ).reset_index().rename(columns = {'index': 'Phno_Idx'}
+#                          ).loc[:, ['Phno_Idx', 'Is_Env_Idx', 'Is_Phno_Idx']]
+# obs_env_lookup
+```
+
+```{python}
+# # confrim obs_env_lookup is set the way it should be.
+# temp = pd.concat([phno_geno.drop(columns = 'SNPS').reset_index(drop = True), # have to reset to correctly cbind these
+#                   obs_env_lookup], 
+#                  axis=1)
+
+# temp = temp.loc[:, ['Env', 'Is_Env_Idx']].drop_duplicates(
+#                                         ).assign(n = 1
+#                                         ).groupby(['Env'#, 'Is_Env_Idx'
+#                                                   ]
+#                                         ).count(
+#                                         ).reset_index()
+
+# temp
+```
+
+```{python}
+# assert 1 == max(temp.n)
+```
+
+
+```{python}
+# # save out obs_geno_lookup
+# np.save(cache_path+'obs_env_lookup.npy', np.asarray(obs_env_lookup))
+# obs_env_lookup.to_csv(cache_path+'obs_env_lookup.csv', index=False)
+```
+
+```{python}
+# # useful for making S, W Matricies
+# obs_env_lookup_small = obs_env_lookup.drop(columns = 'Phno_Idx').drop_duplicates().sort_values('Is_Env_Idx').reset_index(drop = True)
+
+# obs_env_lookup_small
+```
+
+
+
+```{python}
+obs_env_lookup_small = obs_env_lookup.drop(columns = 'Phno_Idx'
+                                    ).drop_duplicates(
+                                    ).sort_values('Env_Idx'
+                                    ).reset_index(drop = True)
+
+obs_env_lookup_small.head()
+```
+
+### Make S Matrix
 
 ```{python}
 SMat = phno.loc[:, ['Env']].merge(soil.drop(columns = ['Unnamed: 0', 'Year'])).drop(columns = ['Env'])
@@ -314,7 +473,30 @@ SMatNames = list(SMat)
 SMat = np.array(SMat)
 ```
 
-## Prep W
+```{python}
+SMat.shape
+```
+
+```{python}
+SMatSmall = np.zeros([
+    obs_env_lookup_small.shape[0], # unique environments
+    len(SMatNames)                 # Cin
+])
+```
+
+```{python}
+for i in obs_env_lookup_small.index:
+    ii = obs_env_lookup_small.loc[(obs_env_lookup_small.Env_Idx == i), 'Is_Phno_Idx']
+    ii = int(ii)
+    SMatSmall[i, ] = SMat[ii, ]
+```
+
+```{python}
+# overwrite with much smaller version (rows from 135793 -> 236)
+SMat = SMatSmall.copy()
+```
+
+### Make W Matrix
 
 ```{python}
 # Input: (N,Cin,Lin)(N,Cin,Lin) or (Cin,Lin)(Cin,Lin)
@@ -322,66 +504,102 @@ SMat = np.array(SMat)
 
 ```{python}
 WMatNames = list(wthr.drop(columns = ['Unnamed: 0', 'Env', 'Year', 'Date', 'DOY']))
-WMat = np.zeros([   # Pytorch uses
-    phno.shape[0],  # N
-    len(WMatNames), # Cin
-    np.max(wthr.DOY)# Lin
+WMat = np.zeros([                  # Pytorch uses
+    obs_env_lookup_small.shape[0], # N
+    len(WMatNames),                # Cin
+    np.max(wthr.DOY)               # Lin
 ])
 ```
 
 ```{python}
-# loop through all obs, but only add each env once (add to all relevant obs)
-added_envs = []
-for i in tqdm.tqdm(phno.index):
-    env = phno.loc[i, 'Env']
+for i in tqdm.tqdm(obs_env_lookup_small.index):
+    ii = obs_env_lookup_small.loc[(obs_env_lookup_small.Env_Idx == i), 'Is_Phno_Idx']
+    ii = int(ii)
 
-    if env in added_envs:
-        pass
-    else:
-        mask = (phno.Env == env)
-        WMat_idxs = phno.loc[mask, ].index
+    ith_Env = phno_geno.loc[(phno_geno.index == ii), 'Env']
+    ith_Env = list(ith_Env)[0]
 
-        # selected data is transposed to match correct shape
-        wthr_mask = (wthr.Env == env)
-        WMat[WMat_idxs, :, :] = wthr.loc[wthr_mask, 
-                                   ].sort_values('DOY'
-                                   ).drop(columns = ['Unnamed: 0', 'Env', 
-                                                     'Year', 'Date', 'DOY']).T
+    # selected data is transposed to match correct shape
+    wthr_mask = (wthr.Env == ith_Env)
+    WMat[i, :, :] = wthr.loc[wthr_mask, 
+                       ].sort_values('DOY'
+                       ).drop(columns = ['Unnamed: 0', 'Env', 
+                                         'Year', 'Date', 'DOY']).T
+```
 
-        added_envs += [env]
+```{python}
+# WMatNames = list(wthr.drop(columns = ['Unnamed: 0', 'Env', 'Year', 'Date', 'DOY']))
+# WMat = np.zeros([   # Pytorch uses
+#     phno.shape[0],  # N
+#     len(WMatNames), # Cin
+#     np.max(wthr.DOY)# Lin
+# ])
+```
+
+```{python}
+# # loop through all obs, but only add each env once (add to all relevant obs)
+# added_envs = []
+# for i in tqdm.tqdm(phno.index):
+#     env = phno.loc[i, 'Env']
+
+#     if env in added_envs:
+#         pass
+#     else:
+#         mask = (phno.Env == env)
+#         WMat_idxs = phno.loc[mask, ].index
+
+#         # selected data is transposed to match correct shape
+#         wthr_mask = (wthr.Env == env)
+#         WMat[WMat_idxs, :, :] = wthr.loc[wthr_mask, 
+#                                    ].sort_values('DOY'
+#                                    ).drop(columns = ['Unnamed: 0', 'Env', 
+#                                                      'Year', 'Date', 'DOY']).T
+
+#         added_envs += [env]
 ```
 
 ## Prep CGMV?
 
 ```{python}
-MMatNames = list(cgmv.drop(columns = ['Unnamed: 0', 'Env', 'Year']))
+# MMatNames = list(cgmv.drop(columns = ['Unnamed: 0', 'Env', 'Year']))
 ```
 
 ```{python}
-MMat = np.zeros([   
-    phno.shape[0],  
-    len(MMatNames)
-])
+# MMat = np.zeros([   
+#     phno.shape[0],  
+#     len(MMatNames)
+# ])
 ```
 
 ```{python}
-# loop through all obs, but only add each env once (add to all relevant obs)
-added_envs = []
-for i in tqdm.tqdm(phno.index):
-    env = phno.loc[i, 'Env']
+# # loop through all obs, but only add each env once (add to all relevant obs)
+# added_envs = []
+# for i in tqdm.tqdm(phno.index):
+#     env = phno.loc[i, 'Env']
 
-    if env in added_envs:
-        pass
-    else:
-        mask = (phno.Env == env)
-        MMat_idxs = phno.loc[mask, ].index
+#     if env in added_envs:
+#         pass
+#     else:
+#         mask = (phno.Env == env)
+#         MMat_idxs = phno.loc[mask, ].index
 
-        # selected data is transposed to match correct shape
-        cgmv_mask = (cgmv.Env == env)
-        MMat[MMat_idxs, :] = cgmv.loc[cgmv_mask, 
-                                ].drop(columns = ['Unnamed: 0', 'Env', 'Year'])
+#         # selected data is transposed to match correct shape
+#         cgmv_mask = (cgmv.Env == env)
+#         MMat[MMat_idxs, :] = cgmv.loc[cgmv_mask, 
+#                                 ].drop(columns = ['Unnamed: 0', 'Env', 'Year'])
 
-        added_envs += [env]
+#         added_envs += [env]
+```
+
+```{python}
+phno_geno.loc[:, ['Env', 'Env_Idx']].merge(cgmv)
+```
+
+```{python}
+cgmv_Env = uniq_Env.merge(cgmv)
+cgmv_Env = cgmv_Env.drop(columns = ['Is_Env_Idx', 'Is_Phno_Idx', 'Env', 'Unnamed: 0', 'Year'])
+MMatNames = list(cgmv_Env)
+MMat = np.asarray(cgmv_Env)
 ```
 
 # Save data
@@ -394,11 +612,10 @@ np.save(cache_path+'MMatNames.npy', MMatNames)
 ```
 
 ```{python}
-phno.to_csv(cache_path+'phno.csv', index=False)
+# phno.to_csv(cache_path+'phno.csv', index=False)
 ```
 
 ```{python}
-np.save(cache_path+'YMat.npy', YMat)
 np.save(cache_path+'SMat.npy', SMat)
 np.save(cache_path+'WMat.npy', WMat)
 np.save(cache_path+'MMat.npy', MMat)
