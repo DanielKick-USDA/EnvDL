@@ -37,7 +37,7 @@ ensure_dir_path_exists(dir_path = cache_path)
 ```{python}
 load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
 # phno = pd.read_csv(load_from+'phno.csv')
-phno_geno = pd.read_csv(load_from+'phno_geno_filter.csv')
+phno_geno = pd.read_csv(load_from+'phno_geno.csv')
 phno = phno_geno
 
 obs_geno_lookup = np.load(load_from+'obs_geno_lookup.npy') # Phno_Idx	Geno_Idx	Is_Phno_Idx
@@ -1181,4 +1181,7 @@ loss_df
 
 
 
+```{python}
+# os._exit(00)
+```
 
