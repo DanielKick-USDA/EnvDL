@@ -107,6 +107,35 @@ cgmv = x_train.merge(x_test, how = "outer")
 ```
 
 ```{python}
+## NEED rep, block, plot to uniquely id everything.
+
+# #phno
+
+# # 147567 
+
+# phno = phno.loc[~(phno.Yield_Mg_ha.isna()), ]                   # 138457 
+# phno.loc[:, ['Env', 'Hybrid', 'Yield_Mg_ha']].drop_duplicates() # 137996  
+# temp = phno.loc[:, ['Env', 'Hybrid', 'Yield_Mg_ha',
+#                     'Experiment',
+#                     'Replicate',
+#                     'Block',
+#                     'Plot',
+#                     'Range',
+#                     'Pass'
+#                    ]].drop_duplicates().groupby(['Env', 'Hybrid', 
+# #                                                 'Experiment',
+#                                                 'Replicate', #
+#                                                 'Block', ##
+#                                                 'Plot', #
+# #                                                 'Range', ##
+# #                                                 'Pass' ##
+#                                                 ]).count().reset_index()
+# temp.loc[(temp.Yield_Mg_ha >1), ]
+
+# phno
+```
+
+```{python}
 # Changes involving only 1 data frame =======================================
 # meta
 meta.Date_Planted = pd.to_datetime(meta.Date_Planted)
@@ -345,6 +374,9 @@ cols_for_phno = [
     'Env',
     'Year',
     'Hybrid',
+    'Replicate',
+    'Block',
+    'Plot',
     'Yield_Mg_ha',          #| <- Key target
     'Stand_Count_plants',   #|- Possible intermediate prediction targets
     'Pollen_DAP_days',      #|
@@ -367,6 +399,9 @@ cols_for_meta = [
     #  'Range',
     #  'Pass',
     'Hybrid',
+    'Replicate',
+    'Block',
+    'Plot',
     #  'Hybrid_orig_name',
     #  'Hybrid_Parent1',
     #  'Hybrid_Parent2',
@@ -405,6 +440,10 @@ cols_for_meta = [
 cols_for_cmnt =[
     'Env',
     'Year',
+    'Hybrid',
+    'Replicate',
+    'Block',
+    'Plot',    
     'Issue/comment_#1',
     'Issue/comment_#2',
     'Issue/comment_#3',
