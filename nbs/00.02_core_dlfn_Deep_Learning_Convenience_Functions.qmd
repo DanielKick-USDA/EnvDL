@@ -439,9 +439,6 @@ class ACGTDataset(Dataset): # for any G containing matix with many (phno) to one
 #     return(out)
 ```
 
-
-
-
 ```{python}
 #| '0': h
 #| '1': i
@@ -449,5 +446,4 @@ class ACGTDataset(Dataset): # for any G containing matix with many (phno) to one
 #| '3': e
 import nbdev; nbdev.nbdev_export()
 ```
-
 
