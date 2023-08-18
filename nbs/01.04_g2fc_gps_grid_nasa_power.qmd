@@ -1,0 +1,170 @@
+---
+jupyter: python3
+---
+
+```{python}
+# Note this notebook depends on a csv produced in R, gps_grid.csv
+```
+
+```{python}
+import os, json, requests # for downloading power data with `dl_power_data()`
+
+import pandas as pd
+
+import folium
+from folium.plugins import MarkerCluster
+
+from tqdm import tqdm
+import time # for sleep
+
+from EnvDL.core import *
+```
+
+```{python}
+cache_path = '../nbs_artifacts/01.04_g2fc_gps_grid_nasa_power/'
+ensure_dir_path_exists(dir_path = cache_path)
+```
+
+```{python}
+# TODO change gps_grid import to a location in data_ext; Do this after moving the R project into data_ext
+gps_grid = pd.read_csv(cache_path+'gps_grid.csv').drop(columns = ['Unnamed: 0'])
+```
+
+```{python}
+if True == False:
+    #Create the map
+    my_map = folium.Map(location = [38.928745, -92.352163], # LatLon
+                        zoom_start = 4)
+
+    for i in gps_grid.index:
+        e = list(gps_grid.loc[i, [
+            'state', 
+            'lat', 
+            'lon']])
+
+        # check for nas
+        if 0 in [1 if ee == ee else 0 for ee in e]:
+            print(e[0]+' contains missing values!')
+        else:
+            folium.Marker((e[1], e[2]), 
+                          popup = e[0], 
+                         ).add_to(my_map)
+
+    my_map
+```
+
+```{python}
+# Copied from 01.02_g2fc_imputation.ipynb
+def dl_power_data(
+    latitude = 32.929, 
+    longitude = -95.770,
+    start_YYYYMMDD = 20150101,
+    end_YYYYMMDD = 20150305
+):
+    # Modified by 
+    # https://power.larc.nasa.gov/docs/tutorials/service-data-request/api/
+    '''
+    *Version: 2.0 Published: 2021/03/09* Source: [NASA POWER](https://power.larc.nasa.gov/)
+    POWER API Multi-Point Download
+    This is an overview of the process to request data from multiple data points from the POWER API.
+    '''
+
+    base_url = r"https://power.larc.nasa.gov/api/temporal/daily/point?parameters=QV2M,T2MDEW,PS,RH2M,WS2M,GWETTOP,ALLSKY_SFC_SW_DWN,ALLSKY_SFC_PAR_TOT,T2M_MAX,T2M_MIN,T2MWET,GWETROOT,T2M,GWETPROF,ALLSKY_SFC_SW_DNI,PRECTOTCORR&community=RE&longitude={longitude}&latitude={latitude}&start={start_YYYYMMDD}&end={end_YYYYMMDD}&format=JSON"
+
+    api_request_url = base_url.format(
+        longitude=longitude, 
+        latitude=latitude,
+        start_YYYYMMDD=start_YYYYMMDD, 
+        end_YYYYMMDD=end_YYYYMMDD)
+
+    response = requests.get(url=api_request_url, verify=True, timeout=30.00)
+
+    content = json.loads(response.content.decode('utf-8'))
+
+    # Repackage content as data frame
+    df_list = [
+        pd.DataFrame(content['properties']['parameter'][e], index = [0]).melt(
+        ).rename(columns = {'variable':'Date', 'value':e})
+        for e in list(content['properties']['parameter'].keys())
+    ]
+
+    for i in range(len(df_list)):
+        if i == 0:
+            out = df_list[i]
+        else:
+            out = out.merge(df_list[i])
+
+    out['Latitude'] = latitude
+    out['Longitude'] = longitude
+    first_cols = ['Latitude', 'Longitude', 'Date']
+    out = out.loc[:, first_cols+[e for e in list(out) if e not in first_cols]]
+    return(out)
+```
+
+
+```{python}
+gps_grid
+```
+
+
+```{python}
+# Download data and cache it.
+sleep_for = 1
+
+ensure_dir_path_exists(dir_path = cache_path+'power_data/')
+cached_files = os.listdir(cache_path+'power_data/')
+for i in tqdm(gps_grid.index):
+    lon, lat = gps_grid.loc[i, ['lon', 'lat']]
+    start_date = 19810101
+    end_date = 20221231
+    save_name = str(lon)+'_'+str(lat)+'_'+str(start_date)+'_'+str(end_date)+'.pkl'
+    
+    if save_name in cached_files:
+        pass
+    else:
+        if i != 0:
+            time.sleep(sleep_for)   
+            
+        res = dl_power_data(
+            latitude = lat, 
+            longitude = lon,
+            start_YYYYMMDD = start_date,
+            end_YYYYMMDD = end_date
+        )
+
+        put_cached_result(cache_path+'power_data/'+save_name, res)    
+```
+
+```{python}
+# load cached files and save into database
+cached_files = os.listdir(cache_path+'power_data/')
+cached_files
+```
+
+
+
+```{python}
+# res = get_cached_result(cache_path+'power_data/'+'-80.9051513671875_25.4180812835693_19810101_20221231.pkl')
+```
+
+```{python}
+# import sqlite3
+```
+
+```{python}
+# with sqlite3.connect(cache_path+"/power_gps_grid.sqlite") as con:
+#     res.to_sql('data', con, if_exists='replace')
+```
+
+
+
+```{python}
+# with sqlite3.connect(cache_path+"/g2f_comp.sqlite") as con:
+#     phno.to_sql('phno', con, if_exists='replace')
+#     meta.to_sql('meta', con, if_exists='replace')
+#     soil.to_sql('soil', con, if_exists='replace')
+#     wthr.to_sql('wthr', con, if_exists='replace')
+#     cgmv.to_sql('cgmv', con, if_exists='replace')
+#     cmnt.to_sql('cmnt', con, if_exists='replace')
+```
+
