@@ -4,6 +4,7 @@ jupyter: python3
 ---
 
 ```{python}
+import os
 import tqdm
 
 import numpy as np
@@ -25,22 +26,25 @@ ensure_dir_path_exists(dir_path = cache_path)
 ```{python}
 load_from = '../nbs_artifacts/01.02_g2fc_imputation/'
 
-meta = pd.read_csv(load_from+'meta0.csv')
-# meta['Date_Planted'] = meta['Date_Planted'].astype(int)
-# meta['Date_Harvested'] = meta['Date_Harvested'].astype(int)
-phno = pd.read_csv(load_from+'phno0.csv')
-soil = pd.read_csv(load_from+'soil0.csv')
-wthr = pd.read_csv(load_from+'wthr0.csv')
-# wthrWide = pd.read_csv(load_from+'wthrWide0.csv')
-cgmv = pd.read_csv(load_from+'cgmv0.csv')
+meta = pd.read_csv(load_from+'meta.csv')
+
+phno = pd.read_csv(load_from+'phno.csv')
+soil = pd.read_csv(load_from+'soil.csv')
+wthr = pd.read_csv(load_from+'wthr.csv')
+
+cgmv = pd.read_csv(load_from+'cgmv.csv')
 ```
 
+```{python}
+temp = phno.groupby(['Env', 'Year', 'Hybrid', 'Replicate', 'Block', 'Plot']).count().reset_index()
+assert 1 == np.max(temp.Yield_Mg_ha)
+```
 
 ```{python}
 mask = ((phno.Yield_Mg_ha.notna())) # This used to allow for missing yield so long as they were in 
 # 2022. Now that the 2022 data is available they should be excluded.
 phno = phno.loc[mask, :].reset_index(drop = True)
-phno = phno.loc[:, ['Env', 'Year', 'Hybrid', 'Yield_Mg_ha']]
+phno = phno.loc[:, ['Env', 'Year', 'Hybrid', 'Replicate', 'Block', 'Plot', 'Yield_Mg_ha']]
 phno = phno.drop_duplicates().reset_index(drop = True).copy()
 ```
 
@@ -70,10 +74,6 @@ snps_found = [exists_geno((taxa_to_filename(taxa = ith_hybrid))) for ith_hybrid 
 ```{python}
 temp = pd.DataFrame(zip(uniq_hybrids, snps_found), columns=['Hybrid', 'SNPS'])
 temp.loc[(temp.SNPS != True)]
-```
-
-```{python}
-import os
 ```
 
 ```{python}
@@ -117,6 +117,16 @@ assert phno_geno.Yield_Mg_ha.isna().sum() == 0
 phno_geno = phno_geno.reset_index().rename(columns = {'index':'Phno_Idx'})
 ```
 
+
+
+
+
+
+
+
+
+
+
 ```{python}
 Env_Idxs  = phno_geno.loc[:, ['Env']
                     ].drop_duplicates(
@@ -138,6 +148,7 @@ phno_geno = phno_geno.merge(Env_Idxs).merge(Geno_Idxs).sort_values('Phno_Idx').r
 
 ```{python}
 phno_geno = phno_geno.loc[:, [ 'Env', 'Year', 'Hybrid', 'Yield_Mg_ha', 
+                              'Replicate', 'Block', 'Plot', 
                               'Phno_Idx', 'Env_Idx', 'Geno_Idx']]
 
 phno_geno
@@ -150,6 +161,59 @@ phno_geno.to_csv(cache_path+'phno_geno.csv', index=False)
 ```{python}
 # and overwrite phno to prevent incomplete data from creeping in.
 phno = phno_geno.copy()
+```
+
+### Observation to Planting/Harvest DOY
+
+```{python}
+# use phno_index as lookup
+
+mgmt_time = phno.merge(
+    meta.loc[:, ['Env', 'Hybrid', 'Replicate', 'Block', 'Plot', 'Date_Planted','Date_Harvested']
+       ].drop_duplicates(), how = 'left')
+
+mgmt_time['DOY_Planted'] = round(mgmt_time['Date_Planted']).astype(int)
+mgmt_time['DOY_Harvested'] = round(mgmt_time['Date_Harvested']).astype(int)
+
+mgmt_time = mgmt_time.loc[:, ['DOY_Planted','DOY_Harvested']]
+mgmt_time
+```
+
+```{python}
+PlantHarvest = np.array(mgmt_time.loc[:, ])
+np.save(cache_path+'PlantHarvestNames.npy', list(mgmt_time))
+np.save(cache_path+'PlantHarvest.npy', PlantHarvest)
+```
+
+### Observation to Metadata
+
+```{python}
+meta_small = phno.loc[:, ['Env', 'Env_Idx']].drop_duplicates().merge(meta.loc[:, [
+    'Env',
+ 'Pounds_Needed_Soil_Moisture',
+ 'Cover_beet',
+ 'Cover_corn',
+ 'Cover_cotton',
+ 'Cover_fallow',
+ 'Cover_lima',
+ 'Cover_peanut',
+ 'Cover_pumpkin',
+ 'Cover_rye',
+ 'Cover_sorghum',
+ 'Cover_soy',
+ 'Cover_wheat',
+ 'Pre_Chisel',
+ 'Pre_Cult',
+ 'Pre_Disc',
+ 'Pre_MinTill']].drop_duplicates(), how = 'left').sort_values('Env_Idx')
+
+meta_small
+```
+
+```{python}
+mgmtMat = np.array(meta_small.loc[:, ].drop(columns = ['Env', 'Env_Idx']))
+np.save(cache_path+'mgmtMatNames.npy', list(meta_small.loc[:, ].drop(columns = ['Env', 'Env_Idx'])))
+np.save(cache_path+'mgmtMat.npy', mgmtMat)
 ```
 
 ### Observation to Genotype
@@ -400,6 +464,7 @@ SMat = SMatSmall.copy()
 
 ```{python}
 # Input: (N,Cin,Lin)(N,Cin,Lin) or (Cin,Lin)(Cin,Lin)
+wthr.DOY = wthr.DOY.astype(int)
 ```
 
 ```{python}
