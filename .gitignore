@@ -1,8 +1,14 @@
+# Remove these! ---------------------------------------------------------------
+# downloaded for testing out nbs
+/nbs/data
+/nbs/*.csv
+
+# From the project structure: -------------------------------------------------
 /data
+/data_ext
 /nbs_artifacts
 
 *.html
-
 *.tar.gz
 *.7z
 
@@ -10,11 +16,7 @@
 nbs/dlgwas/[0-9][0-9]_*
 
 
-
-
-
-
-# nbdev defaults:
+# nbdev defaults: ---------------------------------------------------------------
 
 _docs/
 _proc/
