@@ -19,6 +19,8 @@ import plotly.express as px
 import hilbertcurve
 from hilbertcurve.hilbertcurve import HilbertCurve
 
+from tqdm import tqdm
+
 from EnvDL.core import *
 # from EnvDL.kegg import *
 from EnvDL.dna import *
@@ -33,54 +35,13 @@ ensure_dir_path_exists(dir_path = cache_path)
 
 ```{python}
 load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
-phno = pd.read_csv(load_from+'phno.csv')
+phno = pd.read_csv(load_from+'phno_geno.csv')
 phno
 ```
 
-## Different ways to represent Genotype
+## Filtering SNPs to those in a gene (intron or exon)
 
-```{python}
-ith_hybrid = 'M0088/LH185'
-```
-
-```{python}
-res = get_geno(taxa_to_filename(taxa = ith_hybrid)) 
-res = res[1:] # drop taxa
-res[0:10]
-```
-
-###
-
-```{python}
-len(res)
-# px.imshow( res )
-```
-
-```{python}
-res = list_to_ACGT(in_seq = res)
-```
-
-```{python}
-px.imshow( res[0:20, ] )
-```
-
-```{python}
-res_hilb = np_2d_to_hilbert(
-    in_seq = res
-)
-```
-
-```{python}
-px.imshow( res_hilb[:, :, 0] )
-```
-
-```{python}
-px.imshow( res_hilb[:, :, 1] )
-```
-
-```{python}
-# using kegg
-```
+==NOTE== In this implementation only the coding strand is used. This is fine for using the raw snps but if the gene sequence is to be used then I'll want to flip the %ACGT to have the complement and be able to more directly interpret any changes. 
 
 ```{python}
 from EnvDL.kegg import *
@@ -104,10 +65,6 @@ with open('../data/zma/kegg/kegg_gene_entries.pkl', 'rb') as handle:
     kegg_gene_entries = pkl.load(handle)
 ```
 
-```{python}
-# TODO
-# how should I deal with complements?
-```
 
 ```{python}
 # takes in a position string, returns a list with [chromosome, start, stop, complement]
@@ -119,7 +76,7 @@ def parse_kegg_position(POSITION = '7:2815028..2815922'):
         POSITION = POSITION.replace('complement(', '').replace(')', '')
 
     POSITION = POSITION.replace(':', '..').split('..')
-#     POSITION = [int(e) for e in POSITION]
+
     POSITION = POSITION+['complement' if is_complement else 'coding']
     return(POSITION)
 ```
@@ -143,6 +100,7 @@ len(kegg_gene_entries)
 kegg_gene_entry_positions = [parse_kegg_position(e['POSITION']) for e in kegg_gene_entries]
 ```
 
+
 ```{python}
 # drop Plastid genes
 is_Pltd = [True if e[0]=='Pltd' else False for e in kegg_gene_entry_positions]
@@ -163,7 +121,6 @@ len(kegg_gene_entries)
 # all position entries must have 4 values
 is_right_len = [len(e) == 4 for e in kegg_gene_entry_positions]
 
-
 kegg_gene_entries         = [kegg_gene_entries[i] for i in range(len(kegg_gene_entry_positions)
                                                                 ) if is_right_len[i] ]
 kegg_gene_entry_positions = [kegg_gene_entry_positions[i] for i in range(len(kegg_gene_entry_positions)
@@ -171,8 +128,9 @@ kegg_gene_entry_positions = [kegg_gene_entry_positions[i] for i in range(len(keg
 len(kegg_gene_entries)
 ```
 
+
 ```{python}
-for i in range(len(kegg_gene_entries)):
+for i in tqdm(range(len(kegg_gene_entries))):
     ith_chr, ith_loc_start, ith_loc_stop, ith_strand = kegg_gene_entry_positions[i]
     mask = ((geno_site.Chromosome == int(ith_chr)
                 ) & (geno_site.Position >= int(ith_loc_start)
@@ -181,11 +139,145 @@ for i in range(len(kegg_gene_entries)):
     geno_site.loc[mask, 'kegg_index'] = i
 ```
 
+
 ```{python}
 geno_site.loc[np.isnan(geno_site.kegg_index), 'kegg_index'] = -1
 geno_site.kegg_index = geno_site.kegg_index.astype(int)
 geno_site
 ```
+
+### Make DataFrames with available entries in KEGG
+
+```{python}
+kegg_gene_entry_positions_df = pd.DataFrame(
+    kegg_gene_entry_positions, 
+             columns = ['chr', 'loc_start', 'loc_stop', 'strand']
+            ).reset_index().rename(columns = {'index':'kegg_index'})
+
+kegg_gene_entry_positions_df
+```
+
+```{python}
+geno_site_in_genes = geno_site.loc[:, [
+    'Site Number',
+    'Site Name',
+    'Chromosome',
+    'Position',
+    'kegg_index']].loc[geno_site.kegg_index != -1] # Filter to only those with a kegg index
+geno_site_in_genes
+```
+
+```{python}
+geno_site_in_genes = geno_site_in_genes.merge(kegg_gene_entry_positions_df)
+geno_site_in_genes
+```
+
+
+
+
+### Use above to filter genotype
+
+```{python}
+load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
+ACGT = np.load(load_from+'ACGT.npy')
+```
+
+```{python}
+ACGT.shape
+```
+
+```{python}
+geno_site_in_genes
+```
+
+```{python}
+# create a lookup table
+ACGT_gene_slice_list_to_kegg_lookup = pd.DataFrame(zip(
+    [i for i in range(len(geno_site_in_genes.kegg_index.drop_duplicates()))],
+    geno_site_in_genes.kegg_index.drop_duplicates()), 
+            columns = ['ACGT_gene_slice_list', 'kegg_index'])
+
+ACGT_gene_slice_list_to_kegg_lookup
+```
+
+```{python}
+geno_site_in_genes.kegg_index.drop_duplicates()
+```
+
+```{python}
+kegg_gene_entries
+```
+
+```{python}
+filtered_kegg_gene_entries = []
+
+for i in ACGT_gene_slice_list_to_kegg_lookup.kegg_index:
+    filtered_kegg_gene_entries += [kegg_gene_entries[i]]
+
+# filtered_kegg_gene_entries[0]
+```
+
+```{python}
+ACGT_gene_slice_list = []
+
+for kegg_index in tqdm(geno_site_in_genes.kegg_index.drop_duplicates()):
+    # kegg_index = geno_site_in_genes.kegg_index.drop_duplicates()[0]
+    site_list = list(geno_site_in_genes.loc[geno_site_in_genes.kegg_index == kegg_index, 'Site Number'])
+    ACGT_gene_slice_list += [ACGT[:, :, site_list]]
+```
+
+```{python}
+# to be able to work with this I need
+
+# `ACGT_gene_slice_list` ----
+# Has selected SNPs
+#                      ~~Match this with the kegg index using `ACGT_gene_slice_list_to_kegg_lookup`~~
+#                      Now matches `filtered_kegg_gene_entries`
+#                      |
+# ACGT_gene_slice_list[0] (4926, 4, 11)
+#                          |
+#                          Match this with non-deduplicated genotype (i.e. get the right match for y)
+#                          Use `obs_geno_lookup` in '../nbs_artifacts/01.03_g2fc_prep_matrices/'
+
+# `ACGT_gene_slice_list_to_kegg_lookup` 
+# Go from position in list to kegg
+
+
+# `kegg_gene_entries` (The filtered version) ----
+# way to build up the network structure from the relevant 
+```
+
+```{python}
+[len(e) for e in [ACGT_gene_slice_list, filtered_kegg_gene_entries ]]
+```
+
+```{python}
+put_cached_result(cache_path+'ACGT_gene_slice_list.pkl', ACGT_gene_slice_list)
+```
+
+```{python}
+# kegg_index	ACGT_gene_slice_list
+# np.save(cache_path+'ACGT_list_to_filtered_kegg.pkl', np.asarray(ACGT_gene_slice_list_to_kegg_lookup)) 
+```
+
+```{python}
+put_cached_result(cache_path+'filtered_kegg_gene_entries.pkl', filtered_kegg_gene_entries)
+```
+
+```{python}
+# get_cached_result(cache_path+'filtered_kegg_gene_entries.pkl')
+```
+
+
+
+```{python}
+# kegg_gene_entries
+```
+
+
+
+
+## Visualize available SNPs with respect to KEGG genes
 
 ```{python}
 temp = geno_site.groupby('kegg_index'
@@ -194,7 +286,6 @@ temp = geno_site.groupby('kegg_index'
                  ).loc[:, ['kegg_index', 'Chromosome']
                  ].rename(columns = {'Chromosome':'Count'})
 temp
-
 ```
 
 ```{python}
@@ -227,39 +318,17 @@ temp.head()
 px.scatter(temp, x = 'MoreThanXSNPs', y = 'Genes', log_y= True)
 ```
 
+### Consider one KEGG index
 
 ```{python}
 kegg_index = 35628
-
-geno_site.loc[(geno_site.kegg_index == kegg_index)]
-```
-
-```{python}
-# kegg_gene_entries[kegg_index]
-```
-
-```{python}
-ith_seq = kegg_gene_entries[kegg_index]['NTSEQ']['seq']
-ith_seq
-```
-
-```{python}
-ith_chr, ith_loc_start, ith_loc_stop, ith_strand = kegg_gene_entry_positions[kegg_index]
-```
-
-```{python}
-len(ith_seq)
-```
-
-```{python}
-98444732-98449260
-```
-
-```{python}
-kegg_gene_entries[kegg_index]
 ```
 
 ```{python}
 px.scatter(geno_site.loc[(geno_site.kegg_index == kegg_index)], x = 'Position', y = 'Ref' )
 ```
+
+
+
+
 
