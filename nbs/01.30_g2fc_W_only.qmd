@@ -1,0 +1,1505 @@
+---
+title: W Only
+jupyter: python3
+---
+
+
+> 
+
+
+```{python}
+import os
+
+import numpy as np
+import pandas as pd
+pd.set_option('display.max_columns', None)
+
+import plotly.express as px
+import plotly.io as pio
+pio.templates.default = "plotly_white"
+
+import hilbertcurve
+from hilbertcurve.hilbertcurve import HilbertCurve
+
+from EnvDL.core import * # includes remove_matching_files
+from EnvDL.dna import *
+from EnvDL.dlfn import *
+
+from tqdm import tqdm
+```
+
+```{python}
+cache_path = '../nbs_artifacts/01.30_g2fc_W_only/'
+ensure_dir_path_exists(dir_path = cache_path)
+```
+
+
+# Process Grid of Collected POWER data
+
+```{python}
+import re
+# load in and work with the grid. 
+load_path = '../nbs_artifacts/01.04_g2fc_gps_grid_nasa_power/power_data/'
+cached_files = [e for e in os.listdir(load_path) if re.match('.+\.pkl', e)]
+usa_grid = pd.concat([get_cached_result(load_path+e) for e in cached_files])
+```
+
+```{python}
+temp = usa_grid.loc[:, ['Date']]
+temp = temp.drop_duplicates()
+# sub-optimal way to do this but working on the column is not behaving as expected
+temp.loc[:, 'DOY'] = [pd.Period(e).day_of_year for e in list(temp['Date'])]
+temp['Year'] = temp.Date.str[0:4] 
+```
+
+```{python}
+usa_grid = usa_grid.merge(temp.reset_index(drop = True))
+```
+
+```{python}
+# fix missing values (coded as -999 by NASA)
+```
+
+```{python}
+# trim to 365 days
+mask = (usa_grid.DOY <= 365)
+usa_grid = usa_grid.loc[mask, ]
+```
+
+```{python}
+from sklearn.impute import KNNImputer
+```
+
+```{python}
+# # check if clean weather exists, load if it does, download and fill in if not
+# if 'usa_grid_powr_imp_knn.csv' in os.listdir(cache_path):
+#     usa_grid_knn = pd.read_csv(cache_path+'usa_grid_powr_imp_knn.csv')
+# else:    
+#     # For values that are missing in POWER (-999), remove and then knn impute them
+#     for col in [e for e in list(usa_grid) if sum((usa_grid[e] == -999)) > 0 ]:
+#         mask = (usa_grid[col] == -999)
+#         usa_grid.loc[mask, col] = np.nan    
+    
+    
+#     imputer = KNNImputer(n_neighbors=20)
+#     knn_imputed = pd.DataFrame(
+#         imputer.fit_transform(
+#             usa_grid.drop(columns = ['Latitude', 'Longitude', 'Date', 'DOY', 'Year'])))
+
+#     knn_imputed.columns = [e for e in list(usa_grid) if e not in ['Env', 'Year', 'Date']]
+
+#     usa_grid_knn = pd.concat([usa_grid.loc[:, ['Env', 'Year', 'Date']], knn_imputed], axis = 1)
+#     usa_grid_knn.to_csv(cache_path+'usa_grid_powr_imp_knn.csv', index=False)
+```
+
+```{python}
+[(e, np.sum(usa_grid[e].isna())) for e in list(usa_grid)]
+```
+
+```{python}
+usa_grid
+```
+
+```{python}
+# Deduplicated data frame with each environment
+usa_mat_lookup = usa_grid.loc[:, ['Longitude', 'Latitude', 'Year']
+                   ].drop_duplicates(
+                   ).sort_values(['Longitude', 'Latitude', 'Year']
+                   ).reset_index(drop = True)
+usa_mat_lookup
+# 131124 unique combinations
+```
+
+```{python}
+data_cols = [
+    'QV2M',
+    'T2MDEW',
+    'PS',
+    'RH2M',
+    'WS2M',
+    'GWETTOP',
+    'ALLSKY_SFC_SW_DWN',
+    'ALLSKY_SFC_PAR_TOT',
+    'T2M_MAX',
+    'T2M_MIN',
+    'T2MWET',
+    'GWETROOT',
+    'T2M',
+    'GWETPROF',
+    'ALLSKY_SFC_SW_DNI',
+    'PRECTOTCORR']
+
+usa_mat = np.zeros((temp.shape[0], 16, 365))
+```
+
+```{python}
+usa_grid = usa_grid.sort_values(['Longitude', 'Latitude', 'Year', 'Date']).reset_index(drop = True)
+```
+
+
+```{python}
+# This is orders of magnitude faster than looping. hour+ -> under a second
+usa_mat = usa_grid.loc[:, data_cols]
+
+usa_mat = usa_mat.values.reshape(-1, 365, 16) # have to reshape like this and then swap axes
+
+usa_mat = usa_mat.swapaxes(1,2)
+```
+
+
+```{python}
+# test that reshape is behaving the way I expect it to be.
+i = 0
+lon, lat, year = usa_mat_lookup.loc[i, ['Longitude', 'Latitude', 'Year']]
+
+mask = ((usa_grid.Longitude == lon
+    ) & (usa_grid.Latitude == lat
+    ) & (usa_grid.Year == year))
+
+orig_slice = usa_grid.loc[mask, data_cols]
+# orig_slice
+
+test_slice = pd.DataFrame(usa_mat[i, ].T, columns=data_cols)
+
+assert False not in (test_slice == orig_slice)
+```
+
+## Model weather data
+
+```{python}
+usa_mat_lookup
+```
+
+```{python}
+# to look at performance hold out years >= 2013
+mask = (usa_mat_lookup.Year.astype(int) >= 2013)
+test_idx = usa_mat_lookup.loc[mask, ].index
+train_idx = usa_mat_lookup.loc[~mask, ].index
+```
+
+```{python}
+# TODO fix in a better way
+usa_mat[usa_mat == -999] = -1
+```
+
+
+
+
+```{python}
+usa_mat.shape
+```
+
+### VAE Dense
+
+
+### VAE CNN
+
+```{python}
+# class ResidualBlock1D(nn.Module):
+#     # based on the residual block in 
+#     # https://blog.paperspace.com/writing-resnet-from-scratch-in-pytorch/
+#     def __init__(self, in_channels, out_channels, stride = 1, downsample = None):
+#         super(ResidualBlock1D, self).__init__()
+#         self.c1d_1 = nn.Sequential(
+#             nn.Conv1d(in_channels, out_channels, kernel_size = 3, stride = stride, padding = 1),
+#             nn.BatchNorm1d(out_channels),
+#             nn.ReLU())
+#         # use out_channels as in_channels, fixed stride to 1
+#         self.c1d_2 = nn.Sequential( 
+#             nn.Conv1d(out_channels, out_channels, kernel_size = 3, stride = 1, padding = 1),
+#             nn.BatchNorm1d(out_channels))
+#         self.downsample = downsample
+#         self.relu = nn.ReLU()
+#         self.out_channels = out_channels
+        
+#     def forward(self, x):
+#         residual = x
+#         out = self.c1d_1(x)
+#         out = self.c1d_2(out)
+#         if self.downsample:
+#             residual = self.downsample(x)
+#         out = out + residual
+#         out = self.relu(out)
+#         return(out)
+```
+
+```{python}
+# class VariationalEncoderCNN(nn.Module):
+#     def _make_layer(self, 
+#                     block, # this is the residual block class
+#                     planes, # vestigial naming. example was using a 2d convnet
+#                     blocks, # how many replicates of the block to make
+#                     stride=1):
+#         downsample = None
+#         if stride != 1 or self.inplanes != planes:
+#             downsample = nn.Sequential(
+#                 nn.Conv1d(self.inplanes, planes, kernel_size=1, stride=stride),
+#                 nn.BatchNorm1d(planes),
+#             )
+#         layers = []
+#         layers.append(block(self.inplanes, planes, stride, downsample))
+#         self.inplanes = planes
+#         for i in range(1, blocks):
+#             layers.append(block(self.inplanes, planes))
+
+#         return nn.Sequential(*layers)
+        
+        
+#     def __init__(self,  
+#                  block, layers,
+#                  latent_dims
+#                 ):
+#         super(VariationalEncoderCNN, self).__init__()
+#         self.inplanes = 16 # I think I should use the channel dim here 
+# #         layers = [1, 1, 1, 1, 1, 1, 1]
+#         self.layer0 = self._make_layer(block, 16, layers[0], stride = 1)
+#         self.layer1 = self._make_layer(block, 32, layers[1], stride = 2)
+#         self.layer2 = self._make_layer(block, 64, layers[2], stride = 2)
+#         self.layer3 = self._make_layer(block, 32, layers[3], stride = 2)
+#         self.layer4 = self._make_layer(block, 16, layers[4], stride = 2)
+#         self.layer5 = self._make_layer(block,  8, layers[5], stride = 2)
+#         self.layer6 = self._make_layer(block,  4, layers[6], stride = 2)
+            
+#         self.to_latent = nn.Flatten()
+        
+#         self.encode_mu = nn.Linear(24, latent_dims)
+#         self.encode_sigma = nn.Linear(24, latent_dims)
+        
+#         self.N = torch.distributions.Normal(0, 1)
+#         self.N.loc = self.N.loc.cuda() # Sample onGPU
+#         self.N.scale = self.N.scale.cuda()
+#         self.kl = 0
+        
+#     def forward(self, x):
+#         x_out = self.layer0(x)
+#         x_out = self.layer1(x_out)
+#         x_out = self.layer2(x_out)
+#         x_out = self.layer3(x_out)
+#         x_out = self.layer4(x_out)
+#         x_out = self.layer5(x_out)
+#         x_out = self.layer6(x_out)
+        
+#         x_out = self.to_latent(x_out)
+        
+# #         return x_out
+        
+#         mu = self.encode_mu(x_out)
+#         sigma = self.encode_sigma(x_out)
+        
+#         z =  mu + sigma*self.N.sample(mu.shape)
+#         self.kl = (sigma**2 + mu**2 - torch.log(sigma) - 1/2).sum()
+#         return z
+    
+# # VECNN = VariationalEncoderCNN(block = ResidualBlock1D,
+# #                               layers = [1, 1, 1, 1, 1, 1, 1],
+# #                               latent_dims=2).to(device)
+# # VECNN(next(iter(training_dataloader))).shape
+```
+
+```{python}
+# next(iter(training_dataloader)).shape
+```
+
+```{python}
+# Breaks with data on cuda
+# from torchview import draw_graph
+
+# batch_size = 2
+# # device='meta' -> no memory is consumed for visualization
+# model_graph = draw_graph(VECNN, input_size=(batch_size, 16, 365), device='meta')
+# model_graph.visual_graph
+```
+
+
+
+```{python}
+# # Does this work with the old encoder? Is conv overkill for this? I think so.
+# class Decoder(nn.Module):
+#     def __init__(self, latent_dims):
+#         super(Decoder, self).__init__()
+#         self.decode_network = nn.Sequential(
+#             nn.Flatten(),
+#             nn.Linear(latent_dims, 32),
+#             nn.ReLU(),
+#             nn.Linear(32, 16*365)
+#         )
+    
+#     def forward(self, x):
+#         x_out = self.decode_network(x)
+#         x_out = x_out.reshape((
+#             x_out.shape[0], # There has to be a better way to do this.
+#             16, 
+#             365))
+#         return x_out
+```
+
+```{python}
+# class VariationalAutoencoder(nn.Module):
+#     def __init__(self, block, layers, latent_dims):
+#         super(VariationalAutoencoder, self).__init__()
+#         self.encoder = VariationalEncoderCNN(block, layers, latent_dims)
+#         self.decoder = Decoder(latent_dims)
+
+#     def forward(self, x):
+#         z = self.encoder(x)
+#         return self.decoder(z)
+```
+
+```{python}
+# def train_vae(autoencoder, data, epochs=20):
+#     opt = torch.optim.Adam(autoencoder.parameters())
+#     for epoch in tqdm(range(epochs)):
+#         for x in data:
+# #             x = x.to(device) # GPU
+#             opt.zero_grad()
+#             x_hat = autoencoder(x)
+#             loss = ((x - x_hat)**2).sum() + autoencoder.encoder.kl
+#             loss.backward()
+#             opt.step()
+#     return autoencoder
+```
+
+```{python}
+# latent_dims = 2 # also works for 3
+# vae = VariationalAutoencoder(block = ResidualBlock1D,
+#                               layers = [1, 1, 1, 1, 1, 1, 1],
+#                               latent_dims=2).to(device) # GPU
+```
+
+```{python}
+# training_dataloader = DataLoader(
+#     WMCSDataset(y = torch.from_numpy(usa_mat[train_idx, :, :]).to(torch.float), #.to(device),
+#                 use_gpu_num = 0,
+#                 device = 'cuda'
+#                ),
+#     batch_size = 1024,
+#     shuffle = True
+# )
+```
+
+
+
+
+```{python}
+# vae = train_vae(vae, training_dataloader, epochs=2)
+```
+
+```{python}
+# res = []
+# with torch.no_grad():
+#     for x in training_dataloader:
+#         x = x.to(device)
+#         res.extend(vae.encoder(x).detach().to('cpu').numpy())
+```
+
+```{python}
+# res = pd.DataFrame(np.array(res), columns = ['Latent1', 'Latent2'])
+# res['idx'] = list(train_idx)
+# res
+```
+
+```{python}
+# temp = usa_mat_lookup.reset_index().rename(columns = {'index':'idx'})
+# res = res.merge(temp)
+# train_latents = res
+# train_latents
+```
+
+
+```{python}
+# px.scatter(res, x = 'Latent1', y = 'Latent2', color = 'Year')
+```
+
+```{python}
+# px.scatter(res, x = 'Latent1', y = 'Latent2', color = 'Longitude')
+```
+
+```{python}
+# px.scatter(res, x = 'Latent1', y = 'Latent2', color = 'Latitude')
+```
+
+
+```{python}
+# testing_dataloader = DataLoader(
+#     WMCSDataset(y = torch.from_numpy(usa_mat[test_idx, :, :]).to(torch.float), #.to(device),
+#                 use_gpu_num = 0,
+#                 device = 'cuda'
+#                ),
+#     batch_size = 1024,
+#     shuffle = True
+# )
+```
+
+```{python}
+# res = []
+# with torch.no_grad():
+#     for x in testing_dataloader:
+#         x = x.to(device)
+#         res.extend(vae.encoder(x).detach().to('cpu').numpy())
+```
+
+```{python}
+# res = pd.DataFrame(np.array(res), columns = ['Latent1', 'Latent2'])
+# res['idx'] = list(test_idx)
+# res
+```
+
+```{python}
+# temp = usa_mat_lookup.reset_index().rename(columns = {'index':'idx'})
+# res = res.merge(temp)
+# test_latents = res
+# test_latents
+```
+
+
+
+```{python}
+# px.scatter(test_latents, x = 'Longitude', y = 'Latitude', color = 'Latent1')
+```
+
+```{python}
+# px.scatter(test_latents, x = 'Longitude', y = 'Latitude', color = 'Latent2')
+```
+
+
+```{python}
+# res = pd.concat([train_latents, test_latents])
+# res['Coord'] = res.astype(str).Longitude+'_'+res.astype(str).Latitude
+# res.Year = res.Year.astype(int)
+# res
+```
+
+```{python}
+# mask = (res.Coord == '-124.570508003235_47.945499420166')
+# px.line(res.loc[mask, ], x = 'Latent1', y = 'Latent2', color = 'Year', 
+#         markers=True)
+
+```
+
+
+
+
+```{python}
+# px.scatter(z, x = 'latent1', y = 'latent2', text= 'Env', color = 'Year')
+```
+
+```{python}
+# px.scatter(z, x = 'latent1', y = 'latent2',  color = 'Year')
+```
+
+```{python}
+# px.scatter(z, x = 'latent1', y = 'latent2',  color = 'Prefix')
+```
+
+### VAE RNN
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Load data
+
+```{python}
+load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
+phno_geno = pd.read_csv(load_from+'phno_geno.csv')
+phno = phno_geno
+
+obs_geno_lookup = np.load(load_from+'obs_geno_lookup.npy') # Phno_Idx	Geno_Idx	Is_Phno_Idx
+obs_env_lookup = np.load(load_from+'obs_env_lookup.npy')  # Phno_Idx	Env_Idx	Is_Phno_Idx
+YMat = np.load(load_from+'YMat.npy')
+# GMat = np.load(load_from+'GMat.npy')
+# ACGT_OneHot = np.load(load_from+'ACGT_OneHot.npy')
+# ACGT = np.load(load_from+'ACGT.npy')
+# ACGT_hilb = np.load(load_from+'ACGT_hilb.npy')
+SMat = np.load(load_from+'SMat.npy')
+WMat = np.load(load_from+'WMat.npy')
+# MMat = np.load(load_from+'MMat.npy')
+
+PlantHarvest = np.load(load_from+'PlantHarvest.npy')
+```
+
+```{python}
+WMatNames = np.load(load_from+'WMatNames.npy')
+```
+
+```{python}
+# dataloader_batch_size = 8 #16 #64
+# run_epochs = 200
+
+use_gpu_num = 0
+
+# Imports --------------------------------------------------------------------
+import torch
+from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
+from torch import nn
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+if use_gpu_num in [0, 1]: 
+    torch.cuda.set_device(use_gpu_num)
+print(f"Using {device} device")
+```
+
+```{python}
+load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
+phno_geno = pd.read_csv(load_from+'phno_geno.csv')
+phno = phno_geno
+
+obs_geno_lookup = np.load(load_from+'obs_geno_lookup.npy') # Phno_Idx	Geno_Idx	Is_Phno_Idx
+obs_env_lookup = np.load(load_from+'obs_env_lookup.npy') 
+
+
+# confirm these are the same
+assert 1.0 == np.mean(np.array(phno_geno.loc[:, ['Phno_Idx', 'Geno_Idx']]) == obs_geno_lookup[:, [0, 1]])
+assert 1.0 == np.mean(np.array(phno_geno.loc[:, ['Phno_Idx', 'Env_Idx']]) == obs_env_lookup[:, [0, 1]])
+```
+
+```{python}
+# confirm there's a 1:1 relationship between index and group
+# Confirm that:
+# There's one Env_Idx per Env
+temp = phno_geno.loc[:, ['Env', 'Env_Idx']].drop_duplicates().groupby('Env').count().reset_index()
+assert temp.Env_Idx.max() == 1
+
+# There's one Env per Env_Idx
+temp = phno_geno.loc[:, ['Env', 'Env_Idx']].drop_duplicates().groupby('Env_Idx').count().reset_index()
+assert temp.Env.max() == 1
+
+# There's one Geno_Idx per Hybrid
+temp = phno_geno.loc[:, ['Hybrid', 'Geno_Idx']].drop_duplicates().groupby('Hybrid').count().reset_index()
+assert temp.Geno_Idx.max() == 1
+
+# There's one Hybrid per Geno_Idx 
+temp = phno_geno.loc[:, ['Hybrid', 'Geno_Idx']].drop_duplicates().groupby('Geno_Idx').count().reset_index()
+assert temp.Hybrid.max() == 1
+```
+
+
+## Set Train/Test
+
+```{python}
+rng = np.random.default_rng(9230473) # note, must use rng.shuffle(arr) below for this to take effect.
+```
+
+```{python}
+pct_cumsum_thresh = .9
+
+# make a df to aid in creating train/test splits
+# the plan is to shuffle the rows of the df, calculate the cumulative sum of the percents obs, then 
+# the entries above and below a given percent will be the train/test.
+obs_per_Env = phno.assign(n = 1).groupby('Env').count().reset_index()
+obs_per_Env = obs_per_Env.loc[:, ['Env', 'n']]
+obs_per_Env['pct'] = obs_per_Env.n / obs_per_Env.n.sum()
+obs_per_Env['pct_cumsum'] = np.nan
+obs_per_Env['random_order'] = 0
+
+obs_per_Env
+```
+
+```{python}
+# fill in the random values to sort on
+arr = np.arange(obs_per_Env.shape[0])
+rng.shuffle(arr)
+obs_per_Env.random_order = arr
+
+obs_per_Env = obs_per_Env.sort_values('random_order')
+obs_per_Env['pct_cumsum'] = obs_per_Env.pct.cumsum()
+obs_per_Env
+```
+
+```{python}
+# Convert back into phno indices
+train_Env = list(obs_per_Env.loc[(obs_per_Env.pct_cumsum <= pct_cumsum_thresh), 'Env'])
+test_Env  = list(obs_per_Env.loc[(obs_per_Env.pct_cumsum >  pct_cumsum_thresh), 'Env'])
+
+train_idx = phno.loc[(phno.Env.isin(train_Env)), ].index
+test_idx  = phno.loc[(phno.Env.isin(test_Env)), ].index
+```
+
+```{python}
+# Confirm there are no shared environments
+
+test_Env_Idxs  = list(set(obs_env_lookup[test_idx, 1]))
+train_Env_Idxs = list(set(obs_env_lookup[train_idx, 1]))
+
+# no test envs in train
+assert [] == [e for e in test_Env_Idxs if e in train_Env_Idxs]
+# no train envs in test
+assert [] == [e for e in train_Env_Idxs if e in test_Env_Idxs]
+```
+
+```{python}
+# confirm all observation idxs are have genomic information
+assert [] == [e for e in list(train_idx)+list(test_idx) if e not in obs_geno_lookup[:, 0]]
+```
+
+```{python}
+YMat_cs = calc_cs(YMat[train_idx])
+y_cs = apply_cs(YMat, YMat_cs)
+```
+
+```{python}
+WMat[obs_env_lookup[train_idx, 1], ].shape
+```
+
+```{python}
+# mask = np.isin(obs_env_lookup[:, 0], test_idx)
+# obs_env_lookup[mask, 1]
+```
+
+## Aside: Just weather?
+
+```{python}
+WMat.shape
+```
+
+```{python}
+# wm_demo = WMat[0, :, :]
+# cs_demo =[calc_cs(WMat[0, i, ]) for i in range(WMat.shape[1])]
+```
+
+```{python}
+# # center and scale
+# for i in range(wm_demo.shape[0]):
+#     wm_demo[i, ] = apply_cs(wm_demo[i, ], cs_demo[i])
+```
+
+```{python}
+# px.imshow(pd.DataFrame(WMat[0].T, columns= list(WMatNames)))
+```
+
+```{python}
+WMCS = WMat.copy()
+```
+
+```{python}
+WMCS_center = np.nanmean(WMCS, axis = 0)
+WMCS_scale = np.nanstd(WMCS, axis = 0)
+WMCS = (WMCS - WMCS_center)/WMCS_scale
+```
+
+```{python}
+# px.imshow(pd.DataFrame(WMCS[0].T, columns= list(WMatNames)))
+```
+
+```{python}
+# px.imshow(pd.DataFrame(WMat[0].T, columns= list(WMatNames)))
+```
+
+```{python}
+# px.imshow(pd.DataFrame(WMCS[5].T, columns= list(WMatNames)))
+```
+
+```{python}
+# px.imshow(pd.DataFrame(WMat[5].T, columns= list(WMatNames)))
+```
+
+### Simple AE first
+
+
+```{python}
+# Simple first. AE
+
+class Encoder(nn.Module):
+    def __init__(self, latent_dims):
+        super(Encoder, self).__init__()
+        self.encode_network = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(16*365, 32),
+            nn.ReLU(),
+            nn.Linear(32, latent_dims)
+        )
+    
+    def forward(self, x):
+        x_out = self.encode_network(x)
+        return x_out
+```
+
+```{python}
+model_encoder = Encoder(latent_dims= 2).to(device)
+```
+
+```{python}
+class WMCSDataset(Dataset): # for any G containing matix with many (phno) to one (geno)
+    def __init__(self, 
+                 y, 
+                 transform = None, target_transform = None,
+                 use_gpu_num = 0,
+                 device = 'cuda',
+                 **kwargs 
+                ):
+
+        self.device = device
+        self.y = y 
+        self.transform = transform
+        self.target_transform = target_transform    
+        
+    def __len__(self):
+        return len(self.y)
+    
+    def __getitem__(self, idx):
+        y_idx =self.y[idx]
+        # send all to gpu        
+        if (self.device != 'cpu'):
+            if y_idx.device.type == 'cpu':
+                y_idx = y_idx.to(self.device) 
+            
+        if self.target_transform:
+            y_idx = self.transform(y_idx)
+        return y_idx
+```
+
+```{python}
+training_dataloader = DataLoader(
+    WMCSDataset(y = torch.from_numpy(WMCS).to(torch.float),
+                use_gpu_num = 0,
+                device = 'cuda'
+               ),
+    batch_size = WMCS.shape[0],
+    shuffle = True
+)
+```
+
+```{python}
+next(iter(training_dataloader)).shape
+```
+
+```{python}
+model_encoder(next(iter(training_dataloader))).shape
+```
+
+```{python}
+class Decoder(nn.Module):
+    def __init__(self, latent_dims):
+        super(Decoder, self).__init__()
+        self.decode_network = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(latent_dims, 32),
+            nn.ReLU(),
+            nn.Linear(32, 16*365)
+        )
+    
+    def forward(self, x):
+        x_out = self.decode_network(x)
+        x_out = x_out.reshape((
+            x_out.shape[0], # There has to be a better way to do this.
+            16, 
+            365))
+        return x_out
+        
+```
+
+```{python}
+model_decoder = Decoder(latent_dims= 2).to(device)
+```
+
+```{python}
+model_decoder(
+    model_encoder(next(iter(training_dataloader)))
+).shape
+```
+
+
+```{python}
+px.imshow(
+model_decoder(
+    model_encoder(next(iter(training_dataloader)))
+)[0].cpu().detach().numpy()
+)
+```
+
+```{python}
+# Combine into an AE
+class Autoencoder(nn.Module):
+    def __init__(self, latent_dims):
+        super(Autoencoder, self).__init__()
+        self.encoder = Encoder(latent_dims)
+        self.decoder = Decoder(latent_dims)
+        
+    def forward(self, x):
+        z = self.encoder(x)
+        return self.decoder(z)
+    
+```
+
+```{python}
+def train(autoencoder, data, epochs=20):
+    opt = torch.optim.Adam(autoencoder.parameters())
+    for epoch in tqdm(range(epochs)):
+        for x in data:
+#             x = x.to(device) # GPU
+            opt.zero_grad()
+            x_hat = autoencoder(x)
+            loss = ((x - x_hat)**2).sum()
+            loss.backward()
+            opt.step()
+    return autoencoder
+```
+
+
+```{python}
+latent_dims = 2
+autoencoder = Autoencoder(latent_dims).to(device)
+```
+
+```{python}
+# fig = px.imshow(
+# autoencoder(next(iter(training_dataloader))
+#            )[0].cpu().detach().numpy()
+# )
+# fig
+```
+
+```{python}
+observation = WMCS[0, :, :]
+prediction1 = autoencoder(torch.from_numpy(observation[None, :, :]
+                              ).to(device).type(torch.float))
+```
+
+```{python}
+autoencoder = train(autoencoder, training_dataloader, epochs=2000)
+```
+
+```{python}
+prediction2 = autoencoder(torch.from_numpy(observation[None, :, :]
+                              ).to(device).type(torch.float))
+```
+
+```{python}
+px.imshow(observation)
+```
+
+```{python}
+px.imshow(prediction1[0, :, :].cpu().detach().numpy())
+```
+
+```{python}
+px.imshow(prediction2[0, :, :].cpu().detach().numpy())
+```
+
+### Extend to VAE
+
+
+```{python}
+class VariationalEncoder(nn.Module):
+    def __init__(self, latent_dims):
+        super(VariationalEncoder, self).__init__()
+        self.encode_network = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(16*365, 32),
+            nn.ReLU()
+        )
+        self.encode_mu = nn.Linear(32, latent_dims)
+        self.encode_sigma = nn.Linear(32, latent_dims)
+        
+        
+        self.N = torch.distributions.Normal(0, 1)
+        self.N.loc = self.N.loc.cuda() # hack to get sampling on the GPU
+        self.N.scale = self.N.scale.cuda()
+        self.kl = 0
+        
+    def forward(self, x):
+        x_out = self.encode_network(x)
+        mu = self.encode_mu(x_out)
+        sigma = self.encode_sigma(x_out)
+        
+        z =  mu + sigma*self.N.sample(mu.shape)
+        self.kl = (sigma**2 + mu**2 - torch.log(sigma) - 1/2).sum()
+        return z
+```
+
+```{python}
+class VariationalAutoencoder(nn.Module):
+    def __init__(self, latent_dims):
+        super(VariationalAutoencoder, self).__init__()
+        self.encoder = VariationalEncoder(latent_dims)
+        self.decoder = Decoder(latent_dims)
+
+    def forward(self, x):
+        z = self.encoder(x)
+        return self.decoder(z)
+```
+
+```{python}
+def train_vae(autoencoder, data, epochs=20):
+    opt = torch.optim.Adam(autoencoder.parameters())
+    for epoch in tqdm(range(epochs)):
+        for x in data:
+#             x = x.to(device) # GPU
+            opt.zero_grad()
+            x_hat = autoencoder(x)
+            loss = ((x - x_hat)**2).sum() + autoencoder.encoder.kl
+            loss.backward()
+            opt.step()
+    return autoencoder
+```
+
+```{python}
+latent_dims = 2 # also works for 3
+vae = VariationalAutoencoder(latent_dims).to(device) # GPU
+```
+
+```{python}
+prediction1 = vae(torch.from_numpy(observation[None, :, :]
+                              ).to(device).type(torch.float))
+```
+
+```{python}
+# vae = train_vae(vae, training_dataloader, epochs=2000)
+```
+
+
+
+```{python}
+
+# z = vae.encoder(torch.from_numpy(WMCS).to(device).type(torch.float))
+# z = z.to('cpu').detach().numpy()
+# z = pd.DataFrame(z, columns = ['latent1', 'latent2']).reset_index().rename(columns = {'index':'Env_Idx'})
+# z = phno.loc[:, ['Env', 'Env_Idx']].drop_duplicates().merge(z)
+# z
+```
+
+```{python}
+# z[['Prefix', 'Year']] = z['Env'].str.split('_', expand = True)
+# z
+```
+
+```{python}
+# px.scatter(z, x = 'latent1', y = 'latent2', text= 'Env', color = 'Prefix')
+```
+
+
+
+
+```{python}
+i = 0
+
+# def get_ith_wthr(i):
+#     temp = pd.DataFrame(WMat[i].T, columns=WMatNames).reset_index().rename(columns = {'index':'DOY'})
+#     temp = temp.assign(Env = phno.loc[(phno.Env_Idx == i), 'Env'].values[0])
+#     return(temp)
+```
+
+```{python}
+# temp  = pd.concat([get_ith_wthr(i = e) for e in range(236)])
+# temp
+```
+
+```{python}
+# px.line(temp, x = 'DOY', y = 'QV2M', color = 'Env')
+```
+
+```{python}
+# px.line(temp, x = 'DOY', y = 'T2MDEW', color = 'Env')
+```
+
+```{python}
+# prediction2 = vae(torch.from_numpy(observation[None, :, :]
+#                               ).to(device).type(torch.float))
+```
+
+```{python}
+# px.imshow(observation)
+```
+
+```{python}
+# px.imshow(prediction1[0, :, :].cpu().detach().numpy())
+```
+
+```{python}
+# px.imshow(prediction2[0, :, :].cpu().detach().numpy())
+```
+
+
+
+
+### VAE with Convs
+
+```{python}
+class ResidualBlock1D(nn.Module):
+    # based on the residual block in 
+    # https://blog.paperspace.com/writing-resnet-from-scratch-in-pytorch/
+    def __init__(self, in_channels, out_channels, stride = 1, downsample = None):
+        super(ResidualBlock1D, self).__init__()
+        self.c1d_1 = nn.Sequential(
+            nn.Conv1d(in_channels, out_channels, kernel_size = 3, stride = stride, padding = 1),
+            nn.BatchNorm1d(out_channels),
+            nn.ReLU())
+        # use out_channels as in_channels, fixed stride to 1
+        self.c1d_2 = nn.Sequential( 
+            nn.Conv1d(out_channels, out_channels, kernel_size = 3, stride = 1, padding = 1),
+            nn.BatchNorm1d(out_channels))
+        self.downsample = downsample
+        self.relu = nn.ReLU()
+        self.out_channels = out_channels
+        
+    def forward(self, x):
+        residual = x
+        out = self.c1d_1(x)
+        out = self.c1d_2(out)
+        if self.downsample:
+            residual = self.downsample(x)
+        out = out + residual
+        out = self.relu(out)
+        return(out)
+```
+
+
+```{python}
+class VariationalEncoderCNN(nn.Module):
+    def _make_layer(self, 
+                    block, # this is the residual block class
+                    planes, # vestigial naming. example was using a 2d convnet
+                    blocks, # how many replicates of the block to make
+                    stride=1):
+        downsample = None
+        if stride != 1 or self.inplanes != planes:
+            downsample = nn.Sequential(
+                nn.Conv1d(self.inplanes, planes, kernel_size=1, stride=stride),
+                nn.BatchNorm1d(planes),
+            )
+        layers = []
+        layers.append(block(self.inplanes, planes, stride, downsample))
+        self.inplanes = planes
+        for i in range(1, blocks):
+            layers.append(block(self.inplanes, planes))
+
+        return nn.Sequential(*layers)
+        
+        
+    def __init__(self,  
+                 block, layers,
+                 latent_dims
+                ):
+        super(VariationalEncoderCNN, self).__init__()
+        self.inplanes = 16 # I think I should use the channel dim here 
+#         layers = [1, 1, 1, 1, 1, 1, 1]
+        self.layer0 = self._make_layer(block, 16, layers[0], stride = 1)
+        self.layer1 = self._make_layer(block, 32, layers[1], stride = 2)
+        self.layer2 = self._make_layer(block, 64, layers[2], stride = 2)
+        self.layer3 = self._make_layer(block, 32, layers[3], stride = 2)
+        self.layer4 = self._make_layer(block, 16, layers[4], stride = 2)
+        self.layer5 = self._make_layer(block,  8, layers[5], stride = 2)
+        self.layer6 = self._make_layer(block,  4, layers[6], stride = 2)
+            
+        self.to_latent = nn.Flatten()
+        
+        self.encode_mu = nn.Linear(24, latent_dims)
+        self.encode_sigma = nn.Linear(24, latent_dims)
+        
+        self.N = torch.distributions.Normal(0, 1)
+        self.N.loc = self.N.loc.cuda() # Sample onGPU
+        self.N.scale = self.N.scale.cuda()
+        self.kl = 0
+        
+    def forward(self, x):
+        x_out = self.layer0(x)
+        x_out = self.layer1(x_out)
+        x_out = self.layer2(x_out)
+        x_out = self.layer3(x_out)
+        x_out = self.layer4(x_out)
+        x_out = self.layer5(x_out)
+        x_out = self.layer6(x_out)
+        
+        x_out = self.to_latent(x_out)
+        
+#         return x_out
+        
+        mu = self.encode_mu(x_out)
+        sigma = self.encode_sigma(x_out)
+        
+        z =  mu + sigma*self.N.sample(mu.shape)
+        self.kl = (sigma**2 + mu**2 - torch.log(sigma) - 1/2).sum()
+        return z
+    
+VECNN = VariationalEncoderCNN(block = ResidualBlock1D,
+                              layers = [1, 1, 1, 1, 1, 1, 1],
+                              latent_dims=2).to(device)
+VECNN(next(iter(training_dataloader))).shape
+```
+
+```{python}
+next(iter(training_dataloader)).shape
+```
+
+```{python}
+# Breaks with data on cuda
+# from torchview import draw_graph
+
+# batch_size = 2
+# # device='meta' -> no memory is consumed for visualization
+# model_graph = draw_graph(VECNN, input_size=(batch_size, 16, 365), device='meta')
+# model_graph.visual_graph
+```
+
+
+
+```{python}
+# Does this work with the old encoder? Is conv overkill for this? I think so.
+class Decoder(nn.Module):
+    def __init__(self, latent_dims):
+        super(Decoder, self).__init__()
+        self.decode_network = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(latent_dims, 32),
+            nn.ReLU(),
+            nn.Linear(32, 16*365)
+        )
+    
+    def forward(self, x):
+        x_out = self.decode_network(x)
+        x_out = x_out.reshape((
+            x_out.shape[0], # There has to be a better way to do this.
+            16, 
+            365))
+        return x_out
+```
+
+```{python}
+class VariationalAutoencoder(nn.Module):
+    def __init__(self, block, layers, latent_dims):
+        super(VariationalAutoencoder, self).__init__()
+        self.encoder = VariationalEncoderCNN(block, layers, latent_dims)
+        self.decoder = Decoder(latent_dims)
+
+    def forward(self, x):
+        z = self.encoder(x)
+        return self.decoder(z)
+```
+
+
+
+
+
+
+
+```{python}
+def train_vae(autoencoder, data, epochs=20):
+    opt = torch.optim.Adam(autoencoder.parameters())
+    for epoch in tqdm(range(epochs)):
+        for x in data:
+#             x = x.to(device) # GPU
+            opt.zero_grad()
+            x_hat = autoencoder(x)
+            loss = ((x - x_hat)**2).sum() + autoencoder.encoder.kl
+            loss.backward()
+            opt.step()
+    return autoencoder
+```
+
+```{python}
+latent_dims = 2 # also works for 3
+vae = VariationalAutoencoder(block = ResidualBlock1D,
+                              layers = [1, 1, 1, 1, 1, 1, 1],
+                              latent_dims=2).to(device) # GPU
+```
+
+```{python}
+# vae = train_vae(vae, training_dataloader, epochs=2000)
+```
+
+
+
+
+```{python}
+
+# z = vae.encoder(torch.from_numpy(WMCS).to(device).type(torch.float))
+# z = z.to('cpu').detach().numpy()
+# z = pd.DataFrame(z, columns = ['latent1', 'latent2']).reset_index().rename(columns = {'index':'Env_Idx'})
+# z = phno.loc[:, ['Env', 'Env_Idx']].drop_duplicates().merge(z)
+# z
+```
+
+```{python}
+# z[['Prefix', 'Year']] = z['Env'].str.split('_', expand = True)
+# z
+```
+
+```{python}
+# px.scatter(z, x = 'latent1', y = 'latent2', text= 'Env', color = 'Year')
+```
+
+```{python}
+# px.scatter(z, x = 'latent1', y = 'latent2',  color = 'Year')
+```
+
+```{python}
+# px.scatter(z, x = 'latent1', y = 'latent2',  color = 'Prefix')
+```
+
+## Back to W -> y
+
+```{python}
+# training_dataloader = DataLoader(
+#     ACGTDataset(y = torch.from_numpy(y_cs[train_idx])[:, None].to(torch.float), 
+#                 G = torch.from_numpy(ACGT_hilb).to(torch.float), 
+#                 idx_original = torch.from_numpy(np.array(train_idx)),
+#                 idx_lookup   = torch.from_numpy(np.asarray(obs_geno_lookup)),
+#                 use_gpu_num = 0,
+#                 device = 'cuda'
+#                ),
+#     batch_size = 50,
+#     shuffle = True
+# )
+```
+
+```{python}
+# testing_dataloader = DataLoader(
+#     ACGTDataset(y = torch.from_numpy(y_cs[test_idx])[:, None].to(torch.float), 
+#                 G = torch.from_numpy(ACGT_hilb).to(torch.float), 
+#                 idx_original = torch.from_numpy(np.array(test_idx)),
+#                 idx_lookup   = torch.from_numpy(np.asarray(obs_geno_lookup)),
+#                 use_gpu_num = 0,
+#                 device = 'cuda'
+#                ),
+#     batch_size = 50,
+#     shuffle = True
+# )
+```
+
+```{python}
+# next(iter(training_dataloader))[0].shape
+```
+
+
+```{python}
+# class NeuralNetwork(nn.Module):
+#     def __init__(self):
+#         super(NeuralNetwork, self).__init__()    
+
+#         def Linear_block(in_size, out_size, drop_pr):
+#             block = nn.Sequential(
+#                 nn.Linear(in_size, out_size),
+#                 nn.ReLU(),
+#                 nn.Dropout(drop_pr)
+#             )
+#             return(block)         
+        
+        
+# #         def Conv1D_Max_block(in_channels, out_channels, kernel_size, stride):
+# #             block = nn.Sequential(
+# #                 nn.Conv1d(
+# #                     in_channels= in_channels, # second channel
+# #                     out_channels= out_channels,
+# #                     kernel_size= kernel_size,
+# #                     stride= stride
+# #                 ), 
+# #                 nn.MaxPool1d((kernel_size,), stride=stride)
+# #             )
+# #             return(block)
+        
+#         self.x_network = nn.Sequential(
+#             nn.Conv2d(
+#                     in_channels= 4, 
+#                     out_channels= 4,
+#                     kernel_size= (3, 3),
+#                     stride= 2,
+#                     padding = 1,
+#                     bias = True
+#                 ),
+#             nn.Conv2d(
+#                     in_channels= 4, 
+#                     out_channels= 4,
+#                     kernel_size= (3, 3),
+#                     stride= 2,
+#                     padding = 1,
+#                     bias = True
+#                 ),
+#             nn.Conv2d(
+#                     in_channels= 4, 
+#                     out_channels= 4,
+#                     kernel_size= (3, 3),
+#                     stride= 2,
+#                     padding = 1,
+#                     bias = True
+#                 ),
+#             nn.Conv2d(
+#                     in_channels= 4, 
+#                     out_channels= 4,
+#                     kernel_size= (3, 3),
+#                     stride= 2,
+#                     padding = 1,
+#                     bias = True
+#                 ),
+#             nn.Conv2d(
+#                     in_channels= 4, 
+#                     out_channels= 4,
+#                     kernel_size= (3, 3),
+#                     stride= 2,
+#                     padding = 1,
+#                     bias = True
+#                 ), 
+#             nn.Flatten(),            
+# #             Linear_block(in_size = 116, out_size = 32, drop_pr = 0.3),
+#             nn.Linear(512, 1)
+#         )
+        
+#     def forward(self, x):
+#         x_out = self.x_network(x)
+#         return x_out
+
+# model = NeuralNetwork().to(device)
+
+# model(next(iter(training_dataloader))[0]).shape
+
+# # torch.Size([50, 4, 256, 512])
+```
+
+```{python}
+# # small scale test
+# model, loss_df = train_nn(
+#     cache_path,
+#     training_dataloader,
+#     testing_dataloader,
+#     model,
+#     learning_rate = 1e-3,
+#     batch_size = 50, #dataloader_batch_size,
+#     epochs = 1 #(run_epochs - epochs_run)
+# )
+
+# loss_df
+```
+
+```{python}
+# estimate_iterations(sec_per_it = 95)
+```
+
+```{python}
+# remove_matching_files(
+#     cache_path,
+#     match_regex_list = ['model\.pt'],
+#     dry_run = False
+# )
+```
+
+```{python}
+# dataloader_batch_size = 50
+# run_epochs = 40
+
+# # don't run if either of these exist because there may be cases where we want the results but not the model
+# import re
+
+# if not os.path.exists(cache_path+'/model.pt'): 
+#     # Shared setup (train from scratch and load latest)
+#     model = NeuralNetwork()
+
+#     # find the biggest model to save
+#     saved_models = os.listdir(cache_path)
+#     saved_models = [e for e in saved_models if re.match('model*', e)]
+
+#     if saved_models == []:
+#         epochs_run = 0
+#     else:
+#         saved_models = [e for e in saved_models if e != 'model.pt']
+#         # if there are saved models reload and resume training
+#         saved_models_numbers = [int(e.replace('model_', ''
+#                                     ).replace('.pt', ''
+#                                     ).split('_')[0]) for e in saved_models]
+#         # saved_models
+#         epochs_run = max(saved_models_numbers)+1 # add 1 to account for 0 index
+#         latest_model = [e for e in saved_models if re.match(
+#             '^model_'+str(epochs_run-1)+'_.*\.pt$', e)][0] # subtract 1 to convert back
+#         model.load_state_dict(torch.load(cache_path+latest_model))
+#         print('Resuming Training: '+str(epochs_run)+'/'+str(run_epochs)+' epochs run.')
+    
+#     model.to(device)    
+
+#     model, loss_df = train_nn(
+#         cache_path,
+#         training_dataloader,
+#         testing_dataloader,
+#         model,
+#         learning_rate = 1e-3,
+#         batch_size = dataloader_batch_size,
+#         epochs = (run_epochs - epochs_run)
+#     )
+    
+#     # experimental outputs:
+#     # 1. Model
+#     torch.save(model.state_dict(), cache_path+'/model.pt') # convention is to use .pt or .pth
+
+#     # 2. loss_df    
+#     # If this is resuming training, load and extend the existing loss dataframe
+#     if os.path.exists(cache_path+'/loss_df.csv'):
+#         loss_df_on_disk = pd.read_csv(cache_path+'/loss_df.csv')
+#         epoch_offset = 1 + loss_df_on_disk['Epoch'].max()
+#         loss_df['Epoch'] = loss_df['Epoch'] + epoch_offset
+#         loss_df = pd.concat([loss_df_on_disk, loss_df])
+#     loss_df.to_csv(cache_path+'/loss_df.csv', index=False)  
+    
+#     # 3. predictions 
+#     yhats = pd.concat([
+#         yhat_loop(testing_dataloader, model).assign(Split = 'Test'),
+#         yhat_loop(training_dataloader, model).assign(Split = 'Train')], axis = 0)
+
+#     yhats.to_csv(cache_path+'/yhats.csv', index=False)
+```
+
+### Standard Visualizations
+
+
+
+```{python}
+scale_dict = {'y1':YMat_cs}
+import plotly.graph_objects as go
+```
+
+```{python}
+# loss_df = pd.read_csv(cache_path+'/loss_df.csv')
+
+# loss_df.TrainMSE = reverse_cs(loss_df.TrainMSE, scale_dict['y1'])
+# loss_df.TestMSE  = reverse_cs(loss_df.TestMSE , scale_dict['y1'])
+
+
+# fig = go.Figure()
+# fig.add_trace(go.Scatter(x=loss_df.Epoch, y=loss_df.TestMSE,
+#                     mode='lines', name='Test'))
+# fig.add_trace(go.Scatter(x=loss_df.Epoch, y=loss_df.TrainMSE,
+#                     mode='lines', name='Train'))
+# fig.show()
+```
+
+```{python}
+# yhats
+# px.scatter(yhats, x = 'y_true', y = 'y_pred', color = 'Split')
+```
+
+```{python}
+# yhats = pd.read_csv(cache_path+'/yhats.csv')
+
+# yhats.y_true = reverse_cs(yhats.y_true, scale_dict['y1'])
+# yhats.y_pred = reverse_cs(yhats.y_pred, scale_dict['y1'])
+
+# px.scatter(yhats, x = 'y_true', y = 'y_pred', color = 'Split', trendline="ols")
+```
+
+```{python}
+# yhats['Error'] = yhats.y_pred - yhats.y_true
+
+# px.histogram(yhats, x = 'Error', color = 'Split',
+#              marginal="box", # can be `rug`, `violin`
+#              nbins= 50)
+```
+
+
