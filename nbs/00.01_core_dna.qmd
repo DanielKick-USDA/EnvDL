@@ -43,13 +43,19 @@ geno_path = '../data/zma/g2fc/genotypes/'
 ```
 
 ```{python}
-from EnvDL.core import print_txt
+from EnvDL.core import print_txt # imports must be in a separate cell https://github.com/fastai/nbdev/blob/master/README.md#q-what-is-the-warning-found-a-cell-containing-mix-of-imports-and-computations-please-use-separate-cells
+```
+
+```{python}
 print_txt(path = '../data/zma/g2fc/genotypes/'+'split_and_rename.sh')
 ```
 
 ```{python}
-# Other than listing the taxa this isn't expected to be of much use for our purposes.
 import pandas as pd
+```
+
+```{python}
+# Other than listing the taxa this isn't expected to be of much use for our purposes.
 geno_taxa=pd.read_table('../data/zma/g2fc/genotypes/'+'5_Genotype_Data_All_Years_Filter_TaxaSummary.txt')
 geno_taxa.head()
 ```
@@ -368,7 +374,9 @@ def np_3d_to_hilbert(
 ```{python}
 import numpy as np
 import plotly.express as px
+```
 
+```{python}
 demo = np_2d_to_hilbert(
     in_seq = np.asarray([np.linspace(1, 100, num= 50),
                          np.linspace(100, 1, num= 50)]).T

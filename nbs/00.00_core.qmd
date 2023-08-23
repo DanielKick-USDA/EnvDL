@@ -128,7 +128,7 @@ def put_cached_result(
 ):
     import pickle as pkl
 #     import pickle5 as pkl
-    from EnvDL.core import ensure_dir_path_exists
+#     from EnvDL.core import ensure_dir_path_exists
     ensure_dir_path_exists(dir_path= '/'.join(save_path.split('/')[:-1]) )
     
     with open(save_path, 'wb') as handle:
@@ -209,6 +209,9 @@ def find_df_shared_cols(df1,# DataFrame 1
 
 ```{python}
 import pandas as pd
+```
+
+```{python}
 df1 = pd.DataFrame.from_dict({'a':[0], 'b':['c']})
 df2 = pd.DataFrame.from_dict({'a':[1], 'b':[0]})
 
@@ -237,6 +240,9 @@ def find_df_col_mismatches(df1, # DataFrame 1
 
 ```{python}
 import pandas as pd
+```
+
+```{python}
 df1 = pd.DataFrame.from_dict({'a':[0], 'b':['c']})
 df2 = pd.DataFrame.from_dict({'a':[1], 'b':[0]})
 
@@ -264,7 +270,9 @@ def summarize_col_missing(df):
 ```{python}
 import pandas as pd
 import numpy as np
+```
 
+```{python}
 df1 = pd.DataFrame.from_dict({'a':[0, 1, 2, 3, 4, np.nan], 
                               'b':[0, 1, 2, 3, 4, 5     ]})
 
@@ -308,6 +316,9 @@ def sanitize_col(df, # DataFrame
 
 ```{python}
 import pandas as pd
+```
+
+```{python}
 df1 = pd.DataFrame.from_dict({'letters':['a', 'B', 'cd']})
 
 sanitize_col(df = df1, col = 'letters',
