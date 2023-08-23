@@ -1,0 +1,205 @@
+---
+jupyter: python3
+---
+
+```{python}
+import os, re
+import urllib.request, json 
+
+import tqdm
+import time
+
+import numpy as np
+import pandas as pd
+
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error
+
+import optuna
+import pickle as pkl
+
+from joblib import Parallel, delayed
+```
+
+```{python}
+from EnvDL.core import *
+
+cache_path = '../nbs_artifacts/01.09_collect_historical_data/'
+ensure_dir_path_exists(dir_path = cache_path)
+```
+
+
+Sector : CROPS
+Group: FIELD CROPS 
+    Commodity: CORN
+    Category: AREA HARVESTED, YIELD
+    Data Item: CORN, GRAIN, *
+    
+Select Location:
+Geographic Level: COUNTY
+State: # as needed to be under the download limit
+
+Select Time:
+Year: *-2022
+Period Type: ANNUAL
+
+https://quickstats.nass.usda.gov/#816634B5-2E9C-335E-B52C-FDD998ACE7D0
+
+Alabama - Florida
+Georgia - Illinois
+Indiana - 
+Iowa -
+Kansas - 
+Kentucky - Massachusetts
+Michigan - Mississippi
+Missouri - Montana
+Nebraska (Ag District Central - Southeast)
+Nebraska (Ag District Southwest - Southwest)
+Nevada - North Carolina
+North Dakota - Ohio
+Oklahoma - South Carolina
+South Dakota - Tennessee
+Texas - West Virginia
+Wisconsin - Wyoming
+
+```{python}
+load_from = '../data_ext/zma/nass/'
+
+nass_csvs = [e for e in os.listdir(load_from) if re.match('[A-Z0-9]{8}\-[A-Z0-9]{4}\-[A-Z0-9]{4}\-[A-Z0-9]{4}\-[A-Z0-9]{12}\.csv', e)]
+# nass_csvs = [e for e in nass_csvs if e != nass_state_csv]
+
+nass_df = pd.concat([pd.read_csv(load_from+nass_csv, low_memory=False) for nass_csv in nass_csvs])
+nass_df.head()
+```
+
+```{python}
+nass_df = nass_df.loc[:, [
+#     'Program',
+    'Year',
+#     'Period',
+#     'Week Ending',
+#     'Geo Level',
+    'State',
+#     'State ANSI',
+    'Ag District',
+#     'Ag District Code',
+    'County',
+#     'County ANSI',
+#     'Zip Code',
+#     'Region',
+#     'watershed_code',
+#     'Watershed',
+#     'Commodity',
+    'Data Item',
+#     'Domain',
+#     'Domain Category',
+    'Value',
+#     'CV (%)'
+]]
+
+[[len(set(nass_df[e])), e] for e in list(nass_df)]
+```
+
+```{python}
+
+
+data_dict = {
+                "CORN, GRAIN, IRRIGATED - YIELD, MEASURED IN BU / ACRE": "GRN_IRR_BUpACRE",
+               "CORN, GRAIN - YIELD, MEASURED IN BU / NET PLANTED ACRE": "GRN_BUpNETPLANTEDACRE",
+"CORN, GRAIN, NON-IRRIGATED - YIELD, MEASURED IN BU / NET PLANTED ACRE": "GRN_NON_IRR_BUpNETPLANTEDACRE",
+             "CORN, SILAGE, IRRIGATED - YIELD, MEASURED IN TONS / ACRE": "SLG_IRR_TONSpACRE",
+         "CORN, SILAGE, NON-IRRIGATED - YIELD, MEASURED IN TONS / ACRE": "SLG_NON_IRR_TONSpACRE",
+            "CORN, GRAIN, NON-IRRIGATED - YIELD, MEASURED IN BU / ACRE": "GRN_NON_IRR_BUpACRE",
+    "CORN, GRAIN, IRRIGATED - YIELD, MEASURED IN BU / NET PLANTED ACRE": "GRN_IRR_BUpNETPLANTEDACRE",
+                        "CORN, SILAGE - YIELD, MEASURED IN TONS / ACRE": "SLG_TONSpACRE",
+                           "CORN, GRAIN - YIELD, MEASURED IN BU / ACRE": "GRN_BUpACRE"
+}
+
+```
+
+```{python}
+nass_df = nass_df.merge(pd.DataFrame(data_dict, index = [0]).T.reset_index(
+                ).rename(columns = {'index':'Data Item', 0:'Key'})
+                ).drop(columns = ['Data Item'])
+nass_df = nass_df.rename(columns = {'Ag District': 'AgDistrict'})
+
+```
+
+```{python}
+nass_df
+```
+
+```{python}
+
+
+nass_df_wide = nass_df.pivot(columns='Key', 
+                             values='Value', 
+                             index=['Year', 'State', 'AgDistrict', 'County']
+                            ).reset_index()
+nass_df_wide
+
+```
+
+```{python}
+
+
+# drop cols with low fill rate
+nass_df_wide = nass_df_wide.drop(columns = [
+    'GRN_BUpNETPLANTEDACRE',
+    'GRN_IRR_BUpNETPLANTEDACRE',
+    'GRN_NON_IRR_BUpNETPLANTEDACRE'
+])
+
+```
+
+```{python}
+
+
+# nass_df_wide.loc[nass_df_wide.Year == 2022, ]
+
+# add a placeholder for 2022 data
+
+tmp = nass_df_wide.loc[:, ['State', 'AgDistrict', 'County']].drop_duplicates().reset_index().drop(columns = ['index'])
+tmp['Year'] = 2022
+
+nass_df_wide = nass_df_wide.merge(tmp, how = 'outer')
+```
+
+```{python}
+nass_df_wide.info()
+```
+
+```{python}
+nass_df_wide
+```
+
+```{python}
+# !conda install -c conda-forge geopy -y
+```
+
+```{python}
+# import geopy
+```
+
+```{python}
+# import pandas
+
+# # Identify county
+# from geopy.geocoders import Nominatim
+# geolocator = Nominatim(user_agent="http")
+# # df['county'] = 
+# geolocator.reverse((40.017544, -105.283348))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
