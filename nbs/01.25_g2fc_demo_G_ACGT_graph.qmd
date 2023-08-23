@@ -583,21 +583,49 @@ output_size_dict
 ```
 
 ```{python}
+# BACKUP VERSION -----------------------------------------------------------------------------------
+# input_size_dict = kegg_connections.copy()
+
+# # use the expected output sizes from `output_size_dict` to fill in the non-data sizes
+# for e in tqdm(input_size_dict.keys()):
+#     # overwrite named connections with the output size of those connections
+#     # if the entry is in no_dependants it's data so it's size needs to be grabbed from the input_tensor_dict
+#     input_size_dict[e] = [
+#         list(input_tensor_dict[ee].shape)[-1] # <- NOTE! THIS ASSUMES ONLY DENSE CONNECTIONS (i.e. only the 1st dim is needed)
+#         if ee in no_dependants
+#         else output_size_dict[ee] for ee in input_size_dict[e]]
+
+# # Now walk over entries and overwrite with the sum of the inputs
+# for e in tqdm(input_size_dict.keys()):
+#     input_size_dict[e] = np.sum(input_size_dict[e])
+
+# CHANNEL AWARE VERSION -----------------------------------------------------------------------------------
 input_size_dict = kegg_connections.copy()
 
 # use the expected output sizes from `output_size_dict` to fill in the non-data sizes
+tensor_ndim = len(input_tensor_dict[list(input_tensor_dict.keys())[0]].shape)
 for e in tqdm(input_size_dict.keys()):
     # overwrite named connections with the output size of those connections
     # if the entry is in no_dependants it's data so it's size needs to be grabbed from the input_tensor_dict
-    input_size_dict[e] = [
-        list(input_tensor_dict[ee].shape)[-1] # <- NOTE! THIS ASSUMES ONLY DENSE CONNECTIONS (i.e. only the 1st dim is needed)
-        if ee in no_dependants
-        else output_size_dict[ee] for ee in input_size_dict[e]]
+    
+    # is there no channel dim? (major/minor allele)
+    if 2 == tensor_ndim:
+        input_size_dict[e] = [
+            list(input_tensor_dict[ee].shape)[-1] # <- NOTE! THIS ASSUMES ONLY DENSE CONNECTIONS (i.e. only the 1st dim is needed)
+            if ee in no_dependants
+            else output_size_dict[ee] for ee in input_size_dict[e]]
+    elif 3 == tensor_ndim: # There is a channel dim
+        input_size_dict[e] = [
+            (list(input_tensor_dict[ee].shape)[1]*list(input_tensor_dict[ee].shape)[2]) # <- NOTE! THIS ASSUMES ONLY DENSE CONNECTIONS (i.e. only the 1st dim is needed)  
+            if ee in no_dependants
+            else output_size_dict[ee] for ee in input_size_dict[e]]
 
-# Now walk over entries and overwrite with the su of the inputs
+# Now walk over entries and overwrite with the sum of the inputs
 for e in tqdm(input_size_dict.keys()):
     input_size_dict[e] = np.sum(input_size_dict[e])
 ```
+
+
 
 ```{python}
 dot = Digraph()
@@ -626,6 +654,9 @@ class ListDataset(Dataset): # for any G containing matix with many (phno) to one
     def __init__(self, 
                  y, 
                  x_list,
+                 obs_idxs, # this is a list of the indexes used. It allows us to pass in smaller 
+                           # tensors and then get the right genotype
+                 obs_geno_lookup,
                  transform = None, target_transform = None,
                  use_gpu_num = 0,
                  device = 'cuda',
@@ -633,7 +664,9 @@ class ListDataset(Dataset): # for any G containing matix with many (phno) to one
                 ):
         self.device = device
         self.y = y 
-        self.x_list = x_list,
+        self.x_list = x_list
+        self.obs_idxs = obs_idxs
+        self.obs_geno_lookup = obs_geno_lookup
         self.transform = transform
         self.target_transform = target_transform    
         
@@ -642,7 +675,16 @@ class ListDataset(Dataset): # for any G containing matix with many (phno) to one
     
     def __getitem__(self, idx):
         y_idx =self.y[idx]
-        x_idx =[x[idx] for x in self.x_list[0]] # must be the 0th entry because it's in a tuple
+        
+        idx_geno = obs_geno_lookup[self.obs_idxs[idx], 1]
+#         print(idx)
+#         print(self.obs_idxs[idx])
+#         print(obs_geno_lookup[self.obs_idxs[idx], 1])
+# #         print([x.shape for x in self.x_list[0]])
+#         print([e.shape for e in self.x_list])
+#         print()
+#         x_idx =[x[idx_geno, ] for x in self.x_list[0]] # must be the 0th entry because it's in a tuple
+        x_idx =[x[idx_geno, ] for x in self.x_list] 
         
         if self.target_transform:
             y_idx = self.transform(y_idx)
@@ -653,15 +695,75 @@ class ListDataset(Dataset): # for any G containing matix with many (phno) to one
 ```
 
 ```{python}
+[e.shape for e in x_list_temp]
+```
 
+
+To have a fair test of whether the model is working, I want to ensure there is information to learn in the dataset. To this end I'm using just two genotypes.
+
+```{python}
+# These are the genotypes with the most observations. 
+pd.DataFrame(zip(
+    [i for i in range(4898)],
+    [len(obs_geno_lookup[obs_geno_lookup[:, 1] == i, 0]) for i in range(4898)]
+)).sort_values(1).tail()
+```
+
+```{python}
+idxs_two_genotypes = list(obs_geno_lookup[obs_geno_lookup[:, 1] == 154, 0]
+                   )+list(obs_geno_lookup[obs_geno_lookup[:, 1] == 170, 0])
+np.random.shuffle(idxs_two_genotypes)
+```
+
+```{python}
+test_idx = idxs_two_genotypes[0:round(len(idxs_two_genotypes)*.1)]
+train_idx = idxs_two_genotypes[round(len(idxs_two_genotypes)*.1):]
+```
+
+```{python}
+# they do have a different mean
+[np.mean(YMat[i]) for i in [test_idx, train_idx]]
+```
+
+
+```{python}
+# obs_geno_lookup # Phno_Idx	Geno_Idx	Is_Phno_Idx
+```
+
+```{python}
+# input_tensor_dict['100383860'].shape
+```
+
+
+```{python}
+# x_list_temp = [torch.from_numpy(input_tensor_dict[key]).to(torch.float) for key in input_tensor_dict.keys()]
+# [e.shape for e in x_list_temp]
+# y_temp = torch.from_numpy(YMat[0:4926,]).to(torch.float)#[:, None]
+# y_temp.shape
+
+# training_dataloader = DataLoader(ListDataset(
+#         y = y_temp,
+#         x_list = x_list_temp,
+#         use_gpu_num = 0,
+#         device = 'cuda',
+#     ),
+#     batch_size = 5,
+#     shuffle = True
+# )
+```
+
+```{python}
 x_list_temp = [torch.from_numpy(input_tensor_dict[key]).to(torch.float) for key in input_tensor_dict.keys()]
 [e.shape for e in x_list_temp]
-y_temp = torch.from_numpy(YMat[0:4926,]).to(torch.float)#[:, None]
+y_temp = torch.from_numpy(YMat).to(torch.float)#[:, None]
 y_temp.shape
 
+#FIXME tiny set to test out on cpu
 training_dataloader = DataLoader(ListDataset(
-        y = y_temp,
-        x_list = x_list_temp,
+        y = y_temp[train_idx][:, None],
+        x_list = [e for e in x_list_temp],
+        obs_idxs = train_idx, 
+        obs_geno_lookup = obs_geno_lookup, 
         use_gpu_num = 0,
         device = 'cuda',
     ),
@@ -669,11 +771,142 @@ training_dataloader = DataLoader(ListDataset(
     shuffle = True
 )
 
+testing_dataloader = DataLoader(ListDataset(
+        y = y_temp[test_idx][:, None],
+        x_list = [e for e in x_list_temp],
+        obs_idxs = test_idx, 
+        obs_geno_lookup = obs_geno_lookup,
+        use_gpu_num = 0,
+        device = 'cuda',
+    ),
+    batch_size = 5,
+    shuffle = True
+)
+
+
+
 # next(iter(training_dataloader))[1]
+```
+
+```{python}
+[e.shape for e in next(iter(training_dataloader))[1]]
 ```
 
 ### Set up NeuralNetwork
 
+
+```{python}
+# # first pass is by hand.
+# class NeuralNetwork(nn.Module):
+#     def __init__(self, 
+#                  example_dict, # contains the node (excluding input tensors)
+#                  example_dict_input_size, # contains the input sizes (including the tensors)
+#                  example_dict_output_size,
+#                  input_tensor_names,
+#                  dependancy_order
+#                 ):
+#         super(NeuralNetwork, self).__init__()
+#         def Linear_block(in_size, out_size, drop_pr):
+#             block = nn.Sequential(
+#                 nn.Linear(in_size, out_size),
+#                 nn.ReLU(),
+#                 nn.Dropout(drop_pr))
+#             return(block)   
+        
+#         self.nn_dict = {}
+#         # iterate through the input dictionary and add a linear block for each node (key) included 
+#         for key in example_dict.keys():
+#             self.nn_dict[key] = Linear_block(in_size=example_dict_input_size[key], 
+#                                              out_size=example_dict_output_size[key], 
+#                                              drop_pr=0)
+#         # things for get_input_node in forward to work.
+#         self.example_dict = example_dict
+#         self.input_tensor_names = input_tensor_names
+#         self.dependancy_order = dependancy_order
+        
+#         self.input_tensor_lookup = dict(zip(input_tensor_names, 
+#                                             [i for i in range(len(input_tensor_names))]))
+#         self.result_list = []
+#         self.result_list_lookup = {}
+
+#     def forward(self, x):
+#         # Note: x will be a list. input_tensor_lookup will contain the name: list index pairs.
+#         # I use a dict instead of a list comprehension here because there could be an arbitrarily
+#         # large number of inputs in the list. 
+#         def get_input_node(self, input_node, get_x):    
+#             if input_node in self.input_tensor_names:
+#                 return(get_x[self.input_tensor_lookup[input_node]])
+#             else:
+#                 return(self.result_list[self.result_list_lookup[input_node]])
+            
+#         for key in self.dependancy_order:
+#             input_nodes = self.example_dict[key]
+            
+#             if key not in self.result_list_lookup.keys():
+#                 # I realllllly hope these are being copied by reference...
+#                 # must be first before growing result_list
+#                 self.result_list_lookup[key] = len(self.result_list_lookup)
+                    
+#                 self.result_list += [self.nn_dict[key](torch.concat(
+#                     [get_input_node(self, input_node = e, get_x = x) for e in input_nodes], 
+#                     -1))] # Concat based on the last dim
+
+
+#             else:
+#                 print('b')
+#                 # Note! here I'm saving the tensor without wrapping it in a list.
+#                 self.result_list[self.result_list_lookup[key]] = self.nn_dict[key](torch.concat(
+#                     [get_input_node(self, input_node = e, get_x = x) for e in input_nodes], 
+#                     -1))
+                
+#         return self.result_list[self.result_list_lookup['y_hat']]
+    
+# model = NeuralNetwork(example_dict = kegg_connections, 
+#                       example_dict_input_size = input_size_dict,
+#                       example_dict_output_size = output_size_dict,
+#                       input_tensor_names = list(input_tensor_dict.keys()),
+#                       dependancy_order = dependancy_order)    
+
+
+# yhat = model(next(iter(training_dataloader))[1])
+# yhat
+```
+
+
+```{python}
+# [e for e in model.parameters()]
+```
+
+```{python}
+# [e for e in model.nn_dict['KEGG Orthology (KO) [BR-zma00001]'].parameters()]
+```
+
+```{python}
+# [e for e in model.nn_dict['09180 Brite Hierarchies'].parameters()]
+```
+
+
+```{python}
+# torchviz.make_dot(
+#     yhat.mean(), 
+#                   params=dict(model.named_parameters()), 
+# #                   show_attrs=True, 
+# #                   show_saved=True
+#                  )
+```
+
+```{python}
+# obs_geno_lookup # Phno_Idx	Geno_Idx	Is_Phno_Idx
+# YMat
+```
+
+```{python}
+# kegg_connections
+# input_size_dict
+# output_size_dict
+# list(input_tensor_dict.keys())
+dependancy_order
+```
 
 ```{python}
 # first pass is by hand.
@@ -693,12 +926,22 @@ class NeuralNetwork(nn.Module):
                 nn.Dropout(drop_pr))
             return(block)   
         
-        self.nn_dict = {}
-        # iterate through the input dictionary and add a linear block for each node (key) included 
-        for key in example_dict.keys():
-            self.nn_dict[key] = Linear_block(in_size=example_dict_input_size[key], 
-                                             out_size=example_dict_output_size[key], 
-                                             drop_pr=0)
+        
+        # fill in the list in dependancy order. 
+        layer_list = []
+        for key in dependancy_order:
+            # I think that input nodes need to flatten the input and expect 4*length inputs
+            # TODO only flatten the input layers
+            layer_list += [nn.Sequential(
+                nn.Flatten(),
+                Linear_block(in_size=example_dict_input_size[key], 
+                             out_size=example_dict_output_size[key], 
+                             drop_pr=0))
+                          ]
+
+        self.nn_layer_list = nn.ModuleList(layer_list)
+                    
+        
         # things for get_input_node in forward to work.
         self.example_dict = example_dict
         self.input_tensor_names = input_tensor_names
@@ -708,6 +951,7 @@ class NeuralNetwork(nn.Module):
                                             [i for i in range(len(input_tensor_names))]))
         self.result_list = []
         self.result_list_lookup = {}
+            
 
     def forward(self, x):
         # Note: x will be a list. input_tensor_lookup will contain the name: list index pairs.
@@ -720,53 +964,430 @@ class NeuralNetwork(nn.Module):
                 return(self.result_list[self.result_list_lookup[input_node]])
             
         for key in self.dependancy_order:
-            input_nodes = self.example_dict[key]
             
+            input_nodes = self.example_dict[key]
+            nn_layer_list_idx = [i for i in range(len(dependancy_order)) if dependancy_order[i]==key][0]
+                
             if key not in self.result_list_lookup.keys():
                 # I realllllly hope these are being copied by reference...
                 # must be first before growing result_list
                 self.result_list_lookup[key] = len(self.result_list_lookup)
-                    
-                self.result_list += [self.nn_dict[key](torch.concat(
+#                 print(key)
+#                 print(input_nodes)
+#                 print([get_input_node(self, input_node = e, get_x = x).shape for e in input_nodes])
+#                 print(self.nn_layer_list[nn_layer_list_idx])          
+                
+                self.result_list += [self.nn_layer_list[nn_layer_list_idx](torch.concat(
                     [get_input_node(self, input_node = e, get_x = x) for e in input_nodes], 
                     -1))] # Concat based on the last dim
-
+#                 print('after')
 
             else:
-                print('b')
                 # Note! here I'm saving the tensor without wrapping it in a list.
-                self.result_list[self.result_list_lookup[key]] = self.nn_dict[key](torch.concat(
+                self.result_list[self.result_list_lookup[key]] = self.nn_layer_list[nn_layer_list_idx](torch.concat(
                     [get_input_node(self, input_node = e, get_x = x) for e in input_nodes], 
                     -1))
                 
         return self.result_list[self.result_list_lookup['y_hat']]
     
+
 model = NeuralNetwork(example_dict = kegg_connections, 
                       example_dict_input_size = input_size_dict,
                       example_dict_output_size = output_size_dict,
                       input_tensor_names = list(input_tensor_dict.keys()),
-                      dependancy_order = dependancy_order)    
+                      dependancy_order = dependancy_order) 
 
-
-yhat = model(next(iter(training_dataloader))[1])
-yhat
+model(next(iter(training_dataloader))[1])
+# (5x8 and 20x1)
 ```
 
 ```{python}
-# torchviz.make_dot(
-#     yhat.mean(), 
-#                   params=dict(model.named_parameters()), 
-# #                   show_attrs=True, 
-# #                   show_saved=True
-#                  )
+# list(model.parameters())
 ```
 
 ```{python}
-# obs_geno_lookup # Phno_Idx	Geno_Idx	Is_Phno_Idx
-# YMat
+# 
 ```
 
 
+```{python}
+# the only 
+def train_loop_yx(dataloader, model, loss_fn, optimizer, silent = False):
+#     import numpy as np
+#     import pandas as pd
+    import torch
+    from torch.utils.data import Dataset
+    from torch.utils.data import DataLoader
+#     from torch import nn
+    size = len(dataloader.dataset)
+    for batch, (y_i, xs_i) in enumerate(dataloader):
+        # Compute prediction and loss
+        pred = model(xs_i)
+        loss = loss_fn(pred, y_i) # <----------------------------------------
+
+        # Backpropagation
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        if batch % 100 == 0:
+            loss, current = loss.item(), batch * len(y_i) # <----------------
+            if not silent:
+                print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+```
+
+```{python}
+def train_error_yx(dataloader, model, loss_fn, silent = False):
+#     import numpy as np
+#     import pandas as pd
+    import torch
+    from torch.utils.data import Dataset
+    from torch.utils.data import DataLoader
+#     from torch import nn
+    size = len(dataloader.dataset)
+    num_batches = len(dataloader)
+    train_loss = 0
+
+    with torch.no_grad():
+        for y_i, xs_i in dataloader:
+            pred = model(xs_i)
+            train_loss += loss_fn(pred, y_i).item() # <----------------------
+            
+    train_loss /= num_batches
+    return(train_loss)
+```
+
+```{python}
+def test_loop_yx(dataloader, model, loss_fn, silent = False):
+#     import numpy as np
+#     import pandas as pd
+    import torch
+    from torch.utils.data import Dataset
+    from torch.utils.data import DataLoader
+#     from torch import nn
+
+    size = len(dataloader.dataset)
+    num_batches = len(dataloader)
+    test_loss = 0
+
+    with torch.no_grad():
+        for y_i, xs_i in dataloader:
+            pred = model(xs_i)
+            test_loss += loss_fn(pred, y_i).item() # <-----------------------
+
+    test_loss /= num_batches
+    if not silent:
+        print(f"Test Error: Avg loss: {test_loss:>8f}")
+    return(test_loss)
+```
+
+```{python}
+def train_nn_yx(
+    cache_path,
+    training_dataloader,
+    testing_dataloader,
+    model,
+    learning_rate = 1e-3,
+    batch_size = 64,
+    epochs = 500,
+    model_prefix = 'model'
+):
+    import numpy as np
+    import pandas as pd
+    import torch
+#     from torch.utils.data import Dataset
+#     from torch.utils.data import DataLoader
+    from torch import nn
+    from tqdm import tqdm
+    
+    # Initialize the loss function
+    loss_fn = nn.MSELoss()
+
+    # Because the model parameters are in a dict, model.parameters() won't work. I have to pull them into a list of tensor for the optimizer.
+#     model_params = []
+#     for key in model.nn_dict.keys():
+#         model_params += [e for e in model.nn_dict[key].parameters()]
+    
+    
+#     optimizer = torch.optim.SGD(
+#         model_params, 
+#         lr=learning_rate)
+    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
+
+    loss_df = pd.DataFrame([i for i in range(epochs)], columns = ['Epoch'])
+    loss_df['TrainMSE'] = np.nan
+    loss_df['TestMSE']  = np.nan
+
+    for t in tqdm(range(epochs)):        
+#         print(f"Epoch {t+1}\n-------------------------------")
+        train_loop_yx(training_dataloader, model, loss_fn, optimizer, silent = True)
+
+        loss_df.loc[loss_df.index == t, 'TrainMSE'
+                   ] = train_error_yx(training_dataloader, model, loss_fn, silent = True)
+        
+        loss_df.loc[loss_df.index == t, 'TestMSE'
+                   ] = test_loop_yx(testing_dataloader, model, loss_fn, silent = True)
+        
+        if (t+1)%5 == 0: # Cache in case training is interupted. 
+            # print(loss_df.loc[loss_df.index == t, ['TrainMSE', 'TestMSE']])
+            torch.save(model.state_dict(), 
+                       cache_path+'/'+model_prefix+'_'+str(t)+'_'+str(epochs)+'.pt') # convention is to use .pt or .pth
+        
+    return([model, loss_df])
+```
+
+
+```{python}
+# model_params = []
+# for key in model.nn_dict.keys():
+#     model_params += [e for e in model.nn_dict[key].parameters()]
+
+# train_loop_yx(training_dataloader, model, 
+#               loss_fn  = nn.MSELoss(), 
+#               optimizer = torch.optim.SGD(
+#                   model_params, 
+#               lr=1e-3), 
+#               silent = False)
+```
+
+```{python}
+# def train_loop_yx(dataloader, model, loss_fn, optimizer, silent = False):
+# #     import numpy as np
+# #     import pandas as pd
+#     import torch
+#     from torch.utils.data import Dataset
+#     from torch.utils.data import DataLoader
+# #     from torch import nn
+#     size = len(dataloader.dataset)
+#     for batch, (y_i, xs_i) in enumerate(dataloader):
+#         # Compute prediction and loss
+#         print('a')
+#         pred = model(xs_i)
+#         print('b')
+#         loss = loss_fn(pred, y_i) # <----------------------------------------
+#         print('c')
+#         # Backpropagation
+#         optimizer.zero_grad()
+#         loss.backward()
+#         optimizer.step()
+
+#         if batch % 100 == 0:
+#             loss, current = loss.item(), batch * len(y_i) # <----------------
+#             if not silent:
+#                 print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+```
+
+```{python}
+# model_params = []
+# for key in model.nn_dict.keys():
+#     model_params += [e for e in model.nn_dict[key].parameters()]
+
+# train_loop_yx(training_dataloader, model, 
+#               loss_fn  = nn.MSELoss(), 
+#               optimizer = torch.optim.SGD(
+#                   model_params, 
+#               lr=1e-3), 
+#               silent = False)
+```
+
+```{python}
+model, loss_df = train_nn_yx(
+    cache_path,
+    training_dataloader,
+    training_dataloader, # testing_dataloader,
+    model,
+    learning_rate = 1e-3,
+    batch_size = 64,
+    epochs = 2,
+    model_prefix = 'model'
+)
+```
+
+
+```{python}
+dataloader_batch_size = 50
+run_epochs = 2000
+epochs_run = 0
+
+# don't run if either of these exist because there may be cases where we want the results but not the model
+import re
+
+# if not os.path.exists(cache_path+'/model.pt'): 
+# # Shared setup (train from scratch and load latest)
+# model = NeuralNetwork()
+
+# # find the biggest model to save
+# saved_models = os.listdir(cache_path)
+# saved_models = [e for e in saved_models if re.match('model*', e)]
+
+# if saved_models == []:
+#     epochs_run = 0
+# else:
+#     saved_models = [e for e in saved_models if e != 'model.pt']
+#     # if there are saved models reload and resume training
+#     saved_models_numbers = [int(e.replace('model_', ''
+#                                 ).replace('.pt', ''
+#                                 ).split('_')[0]) for e in saved_models]
+#     # saved_models
+#     epochs_run = max(saved_models_numbers)+1 # add 1 to account for 0 index
+#     latest_model = [e for e in saved_models if re.match(
+#         '^model_'+str(epochs_run-1)+'_.*\.pt$', e)][0] # subtract 1 to convert back
+#     model.load_state_dict(torch.load(cache_path+latest_model))
+#     print('Resuming Training: '+str(epochs_run)+'/'+str(run_epochs)+' epochs run.')
+
+# model.to(device)    
+
+model, loss_df = train_nn_yx(
+    cache_path,
+    training_dataloader,
+    testing_dataloader,
+    model,
+    learning_rate = 1e-3,
+    batch_size = dataloader_batch_size,
+    epochs = (run_epochs - epochs_run)
+)
+
+# # experimental outputs:
+# # 1. Model
+# torch.save(model.state_dict(), cache_path+'/model.pt') # convention is to use .pt or .pth
+
+# # 2. loss_df    
+# # If this is resuming training, load and extend the existing loss dataframe
+# if os.path.exists(cache_path+'/loss_df.csv'):
+#     loss_df_on_disk = pd.read_csv(cache_path+'/loss_df.csv')
+#     epoch_offset = 1 + loss_df_on_disk['Epoch'].max()
+#     loss_df['Epoch'] = loss_df['Epoch'] + epoch_offset
+#     loss_df = pd.concat([loss_df_on_disk, loss_df])
+# loss_df.to_csv(cache_path+'/loss_df.csv', index=False)  
+
+# # 3. predictions 
+# yhats = pd.concat([
+#     yhat_loop(testing_dataloader, model).assign(Split = 'Test'),
+#     yhat_loop(training_dataloader, model).assign(Split = 'Train')], axis = 0)
+
+# yhats.to_csv(cache_path+'/yhats.csv', index=False)
+```
+
+```{python}
+loss_df
+
+px.line(loss_df, x = 'Epoch', y = 'TrainMSE')
+```
+
+```{python}
+learning_rate = 1e-3
+dataloader_batch_size = 50
+# run_epochs = 100
+epochs = 2
+
+
+# Initialize the loss function
+loss_fn = nn.MSELoss()
+
+# Because the model parameters are in a dict, model.parameters() won't work. I have to pull them into a list of tensor for the optimizer.
+model_params = []
+for key in model.nn_dict.keys():
+    model_params += [e for e in model.nn_dict[key].parameters()]
+
+optimizer = torch.optim.SGD(
+    model_params, 
+    lr=learning_rate)
+# optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
+
+
+loss_df = pd.DataFrame([i for i in range(epochs)], columns = ['Epoch'])
+loss_df['TrainMSE'] = np.nan
+loss_df['TestMSE']  = np.nan
+
+# for t in tqdm(range(epochs)):        
+```
+
+
+
+
+```{python}
+loss_df.loc[loss_df.index == t, 'TrainMSE'
+           ] = train_error_yx(training_dataloader, model, loss_fn, silent = True)
+
+loss_df.loc[loss_df.index == t, 'TestMSE'
+           ] = test_loop_yx(testing_dataloader, model, loss_fn, silent = True)
+
+if (t+1)%5 == 0: # Cache in case training is interupted. 
+    # print(loss_df.loc[loss_df.index == t, ['TrainMSE', 'TestMSE']])
+    torch.save(model.state_dict(), 
+               cache_path+'/'+model_prefix+'_'+str(t)+'_'+str(epochs)+'.pt') # convention is to use .pt or .pth
+
+# return([model, loss_df])
+```
+
+
+
+
+
+
+
+```{python}
+dataloader_batch_size = 50
+run_epochs = 100
+
+# don't run if either of these exist because there may be cases where we want the results but not the model
+import re
+
+if not os.path.exists(cache_path+'/model.pt'): 
+    # Shared setup (train from scratch and load latest)
+    model = NeuralNetwork()
+
+    # find the biggest model to save
+    saved_models = os.listdir(cache_path)
+    saved_models = [e for e in saved_models if re.match('model*', e)]
+
+    if saved_models == []:
+        epochs_run = 0
+    else:
+        saved_models = [e for e in saved_models if e != 'model.pt']
+        # if there are saved models reload and resume training
+        saved_models_numbers = [int(e.replace('model_', ''
+                                    ).replace('.pt', ''
+                                    ).split('_')[0]) for e in saved_models]
+        # saved_models
+        epochs_run = max(saved_models_numbers)+1 # add 1 to account for 0 index
+        latest_model = [e for e in saved_models if re.match(
+            '^model_'+str(epochs_run-1)+'_.*\.pt$', e)][0] # subtract 1 to convert back
+        model.load_state_dict(torch.load(cache_path+latest_model))
+        print('Resuming Training: '+str(epochs_run)+'/'+str(run_epochs)+' epochs run.')
+    
+    model.to(device)    
+
+    model, loss_df = train_nn(
+        cache_path,
+        training_dataloader,
+        testing_dataloader,
+        model,
+        learning_rate = 1e-3,
+        batch_size = dataloader_batch_size,
+        epochs = (run_epochs - epochs_run)
+    )
+    
+    # experimental outputs:
+    # 1. Model
+    torch.save(model.state_dict(), cache_path+'/model.pt') # convention is to use .pt or .pth
+
+    # 2. loss_df    
+    # If this is resuming training, load and extend the existing loss dataframe
+    if os.path.exists(cache_path+'/loss_df.csv'):
+        loss_df_on_disk = pd.read_csv(cache_path+'/loss_df.csv')
+        epoch_offset = 1 + loss_df_on_disk['Epoch'].max()
+        loss_df['Epoch'] = loss_df['Epoch'] + epoch_offset
+        loss_df = pd.concat([loss_df_on_disk, loss_df])
+    loss_df.to_csv(cache_path+'/loss_df.csv', index=False)  
+    
+    # 3. predictions 
+    yhats = pd.concat([
+        yhat_loop(testing_dataloader, model).assign(Split = 'Test'),
+        yhat_loop(training_dataloader, model).assign(Split = 'Train')], axis = 0)
+
+    yhats.to_csv(cache_path+'/yhats.csv', index=False)
+```
 
 
 
