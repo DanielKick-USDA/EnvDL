@@ -44,11 +44,9 @@ from EnvDL.dlfn import *
     # yhat_loop_yx
     
 from tqdm import tqdm
-```
 
-```{python}
 from graphviz import Digraph
-import torchviz
+# import torchviz
 ```
 
 ```{python}
@@ -75,269 +73,20 @@ if use_gpu_num in [0, 1]:
 print(f"Using {device} device")
 ```
 
+```{python}
+# Settings:
+## For graph linear blocks
+default_output_size = 50
+default_dropout_pr = 0.2
+default_block_reps = 2
+
+## Training settings
+run_epochs = 10
+epochs_run = 0
+dataloader_batch_size = 3000
+```
+
 ## Functions
-
-### Graph Construction
-
-```{python}
-## Building a Neural Net from an arbitrary graph
-# start by finding the top level -- all those keys which are theselves not values
-# helper function to get all keys and all value from a dict. Useful for when keys don't have unique values.
-def find_uniq_keys_values(input_dict):
-    all_keys = list(input_dict.keys())
-    all_values = []
-    for e in all_keys:
-        all_values.extend(input_dict[e])
-    all_values = list(set(all_values))
-
-    return({'all_keys': all_keys,
-           'all_values': all_values})
-```
-
-```{python}
-### Find order that nodes in the graph should be called to have all dependencies run when they are called.
-# find the dependancies for run order from many dependancies to none
-# wrapper function to find the nodes that aren't any other nodes dependancies.
-def find_top_nodes(all_key_value_dict):
-    return([e for e in all_key_value_dict['all_keys'] if e not in all_key_value_dict['all_values']])
-# wrapper function to find the input nodes. They don't occur in the keys and thus won't be added to the list otherwise.
-# another way to do this would have been to 
-def find_input_nodes(all_key_value_dict):
-    return([e for e in all_key_value_dict['all_values'] if e not in all_key_value_dict['all_keys']])
-```
-
-```{python}
-# moved to 00.00_core
-# def read_json(json_path):
-#     with open(json_path, 'r') as fp:
-#         dat = json.load(fp)
-#     return(dat)
-
-# moved to 00.02_core_dlfn_Deep_Learning_Convenience_Functions
-# def read_split_info(
-#     load_from = '../nbs_artifacts/01.06_g2fc_cluster_genotypes/',
-#     json_prefix = '2023:9:5:12:8:26'):
-#     jsons = [e for e in os.listdir(load_from) if re.match('^'+json_prefix+'.+\.json$', e)]
-#     vals = [e for e in jsons if re.match('.+val\d+\.json$', e)]
-#     vals.sort()
-#     out = {}
-#     out['test'] = [read_json(json_path = load_from+json_prefix+'-test.json')]
-#     out['test_file'] = [json_prefix+'-test.json']
-#     out['validate'] = [read_json(json_path = load_from+val) for val in vals]
-#     out['validate_files'] = [val for val in vals]
-#     return(out)
-
-# moved to 00.02_core_dlfn_Deep_Learning_Convenience_Functions
-# def find_idxs_split_dict(
-#     obs_df, # assumes presence of Year, Female, Male
-#     split_dict # from read_split_info() output. Should be a test of validate dict.
-# ):
-
-#     temp = obs_df
-#     test_mask = ((temp.Year.isin(split_dict['test_years'])) & 
-#                  ((temp.Female.isin(split_dict['test_parents'])) |
-#                   (temp.Male.isin(split_dict['test_parents']))))
-#     temp['Split'] = ''
-#     temp.loc[test_mask, 'Split'] = 'Test'
-
-#     train_mask = (~(temp.Year.isin(split_dict['test_years'])) & 
-#                  (~((temp.Female.isin(split_dict['test_parents'])) |
-#                   (temp.Male.isin(split_dict['test_parents'])))))
-#     temp.loc[train_mask, 'Split'] = 'Train'
-
-#     temp_test  = (temp.Split == 'Test') # should be the same as with the mask above
-#     temp_train = (temp.Split == 'Train') # should be the same as with the mask above
-
-#     # Confirm that there's no overlap in parents or years
-#     temp_test_parents  = set(temp.loc[temp_test, 'Female']+temp.loc[temp_test, 'Male'])
-#     temp_train_parents = set(temp.loc[temp_train, 'Female']+temp.loc[temp_train, 'Male'])
-
-#     temp_test_years  = set(temp.loc[temp_test, 'Year'])
-#     temp_train_years = set(temp.loc[temp_train, 'Year'])
-
-#     assert [] == [e for e in temp_test_parents if e in temp_train_parents]
-#     assert [] == [e for e in temp_train_parents if e in temp_test_parents]
-#     assert [] == [e for e in temp_test_years if e in temp_train_years]
-#     assert [] == [e for e in temp_train_years if e in temp_test_years]
-
-#     return({
-#         'test_idx': temp.loc[test_mask, ].index, 
-#         'train_idx': temp.loc[train_mask, ].index} )
-```
-
-### Model training
-
-```{python}
-# moved to 00.02_core_dlfn_Deep_Learning_Convenience_Functions
-# def train_loop_yx(dataloader, model, loss_fn, optimizer, silent = False):
-#     import torch
-#     from torch.utils.data import Dataset
-#     from torch.utils.data import DataLoader
-#     size = len(dataloader.dataset)
-#     for batch, (y_i, xs_i) in enumerate(dataloader):
-#         # Compute prediction and loss
-#         pred = model(xs_i)
-        
-#         # ensure both are on cuda
-#         if pred.device.type == 'cpu':
-#             pred = pred.to('cuda')
-#         if y_i.device.type == 'cpu':
-#             y_i = y_i.to('cuda')
-        
-#         loss = loss_fn(pred, y_i)
-        
-#         # Backpropagation
-#         optimizer.zero_grad()
-#         loss.backward()
-#         optimizer.step()
-
-#         if batch % 100 == 0:
-#             loss, current = loss.item(), batch * len(y_i) 
-#             if not silent:
-#                 print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
-
-# train_loop_yx(dataloader = training_dataloader, 
-#               model = model, 
-#               loss_fn = nn.MSELoss(), 
-#               optimizer = torch.optim.SGD(model.parameters(), lr=0.003),
-#               silent = False)
-```
-
-```{python}
-# moved to 00.02_core_dlfn_Deep_Learning_Convenience_Functions
-# def train_error_yx(dataloader, model, loss_fn, silent = False):
-#     import torch
-#     from torch.utils.data import Dataset
-#     from torch.utils.data import DataLoader
-#     size = len(dataloader.dataset)
-#     num_batches = len(dataloader)
-#     train_loss = 0
-
-#     with torch.no_grad():
-#         for y_i, xs_i in dataloader:
-#             pred = model(xs_i)
-            
-#             # ensure both are on cuda
-#             if pred.device.type == 'cpu':
-#                 pred = pred.to('cuda')
-#             if y_i.device.type == 'cpu':
-#                 y_i = y_i.to('cuda')
-            
-#             train_loss += loss_fn(pred, y_i).item()
-            
-#     train_loss /= num_batches
-#     return(train_loss)
-```
-
-```{python}
-# moved to 00.02_core_dlfn_Deep_Learning_Convenience_Functions
-# def test_loop_yx(dataloader, model, loss_fn, silent = False):
-#     import torch
-#     from torch.utils.data import Dataset
-#     from torch.utils.data import DataLoader
-    
-#     size = len(dataloader.dataset)
-#     num_batches = len(dataloader)
-#     test_loss = 0
-
-#     with torch.no_grad():
-#         for y_i, xs_i in dataloader:
-#             pred = model(xs_i)
-            
-#             # ensure both are on cuda
-#             if pred.device.type == 'cpu':
-#                 pred = pred.to('cuda')
-#             if y_i.device.type == 'cpu':
-#                 y_i = y_i.to('cuda')
-                
-#             test_loss += loss_fn(pred, y_i).item() 
-
-#     test_loss /= num_batches
-#     if not silent:
-#         print(f"Test Error: Avg loss: {test_loss:>8f}")
-#     return(test_loss)
-```
-
-```{python}
-# moved to 00.02_core_dlfn_Deep_Learning_Convenience_Functions
-# def train_nn_yx(
-#     cache_path,
-#     training_dataloader,
-#     testing_dataloader,
-#     model,
-# #     learning_rate = 1e-3, now treated as a kwarg
-#     batch_size = 64,
-#     epochs = 500,
-#     model_prefix = 'model',
-#     save_model = False,
-#     **kwargs # can include 'silent' for train loop or 'save_on' for saving frequency
-# ):
-#     import numpy as np
-#     import pandas as pd
-#     import torch
-#     from torch import nn
-#     from tqdm import tqdm
-    
-#     if 'optimizer' not in kwargs:
-#         optimizer = torch.optim.SGD(model.parameters(), lr=kwargs['learning_rate'])
-#     else:
-#         optimizer = kwargs['optimizer']
-        
-#     if 'save_on' in kwargs:
-#         save_on = kwargs['save_on']
-#     else:
-#         save_on = 5       
-    
-#     # Initialize the loss function
-#     loss_fn = nn.MSELoss()     
-
-#     loss_df = pd.DataFrame([i for i in range(epochs)], columns = ['Epoch'])
-#     loss_df['TrainMSE'] = np.nan
-#     loss_df['TestMSE']  = np.nan
-
-#     for t in tqdm(range(epochs)):        
-#         if 'silent' in kwargs:
-#             train_loop_yx(training_dataloader, model, loss_fn, optimizer, silent = kwargs['silent'])
-#         else:
-#             train_loop_yx(training_dataloader, model, loss_fn, optimizer, silent = True)
-
-#         loss_df.loc[loss_df.index == t, 'TrainMSE'
-#                    ] = train_error_yx(training_dataloader, model, loss_fn, silent = True)
-        
-#         loss_df.loc[loss_df.index == t, 'TestMSE'
-#                    ] = test_loop_yx(testing_dataloader, model, loss_fn, silent = True)
-        
-#         if (t+1)%save_on == 0: # Cache in case training is interupted. 
-#             if save_model:
-#                 torch.save(model.state_dict(), 
-#                            cache_path+'/'+model_prefix+'_'+str(t)+'_'+str(epochs)+'.pt') # convention is to use .pt or .pth
-        
-#     return([model, loss_df])
-```
-
-```{python}
-# moved to 00.02_core_dlfn_Deep_Learning_Convenience_Functions
-# def yhat_loop_yx(dataloader, model):
-#     import numpy as np
-#     import pandas as pd
-#     import torch
-
-#     size = len(dataloader.dataset)
-#     num_batches = len(dataloader)
-    
-#     y_true = np.array([])
-#     y_pred = np.array([])
-    
-#     with torch.no_grad():
-#         for y_i, xs_i in dataloader:
-#             yhat_i = model(xs_i)
-#             y_pred = np.append(y_pred, np.array(yhat_i.cpu()))
-#             y_true = np.append(y_true, np.array(y_i.cpu()))
-    
-#     out = np.concatenate([y_true[:, None], y_pred[:, None]], axis = 1) 
-#     out = pd.DataFrame(out, columns = ['y_true', 'y_pred'])
-#     return(out)
-```
 
 ## Load data
 
@@ -366,7 +115,81 @@ ACGT_gene_slice_list = get_cached_result(load_from+'ACGT_gene_slice_list.pkl')
 assert len(ACGT_gene_slice_list) == len(parsed_kegg_gene_entries)
 ```
 
+
+```{python}
+## Create train/test validate indicies from json
+load_from = '../nbs_artifacts/01.06_g2fc_cluster_genotypes/'
+
+split_info = read_split_info(
+    load_from = '../nbs_artifacts/01.06_g2fc_cluster_genotypes/',
+    json_prefix = '2023:9:5:12:8:26')
+
+temp = phno.copy()
+temp[['Female', 'Male']] = temp['Hybrid'].str.split('/', expand = True)
+
+test_dict = find_idxs_split_dict(
+    obs_df = temp, 
+    split_dict = split_info['test'][0]
+)
+# test_dict
+
+# since this is applying predefined model structure no need for validation.
+# This is included for my future reference when validation is needed.
+temp = temp.loc[test_dict['train_idx'], ] # restrict before re-aplying
+
+val_dict = find_idxs_split_dict(
+    obs_df = temp, 
+    split_dict = split_info['validate'][0]
+)
+# val_dict
+
+test_dict
+
+train_idx = test_dict['train_idx']
+test_idx  = test_dict['test_idx']
+```
+
+```{python}
+# # FIXME
+train_idx = train_idx[0:100] # 81169 total
+test_idx = test_idx[0:100]
+# # 1/100th
+# train_idx = train_idx[0:3000] # 81169 total
+# test_idx = test_idx[0:3000]
+```
+
 ## Generate Graph for DNN
+
+### Functions for Graph Construction
+
+```{python}
+## Building a Neural Net from an arbitrary graph
+# start by finding the top level -- all those keys which are theselves not values
+# helper function to get all keys and all value from a dict. Useful for when keys don't have unique values.
+def find_uniq_keys_values(input_dict):
+    all_keys = list(input_dict.keys())
+    all_values = []
+    for e in all_keys:
+        all_values.extend(input_dict[e])
+    all_values = list(set(all_values))
+
+    return({'all_keys': all_keys,
+           'all_values': all_values})
+```
+
+```{python}
+### Find order that nodes in the graph should be called to have all dependencies run when they are called.
+# find the dependancies for run order from many dependancies to none
+# wrapper function to find the nodes that aren't any other nodes dependancies.
+def find_top_nodes(all_key_value_dict):
+    return([e for e in all_key_value_dict['all_keys'] if e not in all_key_value_dict['all_values']])
+# wrapper function to find the input nodes. They don't occur in the keys and thus won't be added to the list otherwise.
+# another way to do this would have been to 
+def find_input_nodes(all_key_value_dict):
+    return([e for e in all_key_value_dict['all_values'] if e not in all_key_value_dict['all_keys']])
+```
+
+### Process paths into graphs
 
 ```{python}
 # Restrict to only those with pathway
@@ -392,7 +215,6 @@ kegg_gene_brite[1]['BRITE']['BRITE_PATHS']
 ### Tiny `n`  gene version of the network:
 
 ```{python}
-# n_genes = 1#200
 n_genes = 6067 
 
 print('Using '+str(n_genes)+'/'+str(len(kegg_gene_brite))+' genes.')
@@ -465,15 +287,6 @@ for key in kegg_connections.keys():
 ```
 
 ```{python}
-# [key for key in input_size_dict.keys() if type(input_size_dict[key]) != np.int64]
-# input_size_dict['Other DSBR factors']
-
-# kegg_connections['Other DSBR factors']
-
-# start with those that are not connected to any SNPs. Remove them.
-
-# rm_list = [key for key in kegg_connections.keys() if kegg_connections[key]==[]]
-
 # there might be associations with no dependants and with no dependants except those that have no dependants.
 # Build up a list with those keys that don't connect back to snps then I'll pass over the connection dict once to remove references to them.
 rm_list = []
@@ -618,7 +431,6 @@ _==NOTE! This assumes only dense connections!==_
 
 ```{python}
 # This could be replaced by a sort of "distance from output" measure
-default_output_size = 50
 output_size_dict = dict(zip(dependancy_order, 
                         [default_output_size for i in range(len(dependancy_order))]))
 output_size_dict['y_hat'] = 1 
@@ -627,10 +439,16 @@ output_size_dict['y_hat'] = 1
 
 ```{python}
 # Setup dropout % dictionary
-default_dropout_pr = 0.2
 dropout_pr_dict = dict(zip(dependancy_order, 
                         [default_dropout_pr for i in range(len(dependancy_order))]))
 dropout_pr_dict['y_hat'] = 0 # not required, output node is purely linear without dropout
+```
+
+```{python}
+# Setup replicates of layers dictionary
+block_rep_dict = dict(zip(dependancy_order, 
+                        [default_block_reps for i in range(len(dependancy_order))]))
+block_rep_dict['y_hat'] = 1 # not required, output node is purely linear. Not a linear block
 ```
 
 ```{python}
@@ -674,7 +492,7 @@ if vis_dot_bool:
 dot
 ```
 
-### Set up DataSet
+## Set up DataSet
 
 Now we have
 
@@ -685,49 +503,6 @@ Now we have
 - A list with the order that each module should be called: `dependancy_order`
 
 To have a fair test of whether the model is working, I want to ensure there is information to learn in the dataset. To this end I'm using just two genotypes.
-
-```{python}
-## Create train/test validate indicies from json
-load_from = '../nbs_artifacts/01.06_g2fc_cluster_genotypes/'
-
-split_info = read_split_info(
-    load_from = '../nbs_artifacts/01.06_g2fc_cluster_genotypes/',
-    json_prefix = '2023:9:5:12:8:26')
-
-temp = phno.copy()
-temp[['Female', 'Male']] = temp['Hybrid'].str.split('/', expand = True)
-
-test_dict = find_idxs_split_dict(
-    obs_df = temp, 
-    split_dict = split_info['test'][0]
-)
-# test_dict
-
-# since this is applying predefined model structure no need for validation.
-# This is included for my future reference when validation is needed.
-temp = temp.loc[test_dict['train_idx'], ] # restrict before re-aplying
-
-val_dict = find_idxs_split_dict(
-    obs_df = temp, 
-    split_dict = split_info['validate'][0]
-)
-# val_dict
-
-test_dict
-
-train_idx = test_dict['train_idx']
-test_idx  = test_dict['test_idx']
-```
-
-```{python}
-# # FIXME
-train_idx = train_idx[0:100] # 81169 total
-test_idx = test_idx[0:100]
-# # 1/100th
-# train_idx = train_idx[0:3000] # 81169 total
-# test_idx = test_idx[0:3000]
-```
-
 
 ```{python}
 x_list_temp = [torch.from_numpy(input_tensor_dict[key]).to(torch.float) for key in input_tensor_dict.keys()]
@@ -757,17 +532,27 @@ class NeuralNetwork(nn.Module):
                  example_dict_input_size, # contains the input sizes (including the tensors)
                  example_dict_output_size,
                  example_dict_dropout_pr,
+                 example_block_rep_dict,
                  input_tensor_names,
                  dependancy_order
                 ):
         super(NeuralNetwork, self).__init__()
-        def Linear_block(in_size, out_size, drop_pr):
-            block = nn.Sequential(
-                nn.Linear(in_size, out_size),
-                nn.ReLU(),
-                nn.Dropout(drop_pr))
-            return(block)   
+        def Linear_block(in_size, out_size, drop_pr, block_reps):
+            block_list = []
+            for i in range(block_reps):
+                if i == 0:
+                    block_list += [
+                        nn.Linear(in_size, out_size),
+                        nn.ReLU(),
+                        nn.Dropout(drop_pr)]
+                else:
+                    block_list += [
+                        nn.Linear(out_size, out_size),
+                        nn.ReLU(),
+                        nn.Dropout(drop_pr)]
         
+            block = nn.ModuleList(block_list)
+            return(block)           
         
         # fill in the list in dependancy order. 
         layer_list = []
@@ -780,7 +565,8 @@ class NeuralNetwork(nn.Module):
                 layer_list += [
                     Linear_block(in_size=example_dict_input_size[key], 
                                  out_size=example_dict_output_size[key], 
-                                 drop_pr=example_dict_dropout_pr[key])
+                                 drop_pr=example_dict_dropout_pr[key],
+                                 block_reps=example_block_rep_dict[key])
                               ]
             else:
                 layer_list += [
@@ -823,10 +609,21 @@ class NeuralNetwork(nn.Module):
                     x[self.input_tensor_lookup[key]]
                 ).clone()]
 
+            elif key != 'y_hat':
+                # refactored to handle module lists (even if module list contains only one entry)
+                out = torch.concat(
+                    [get_input_node(self, input_node = e, get_x = x) for e in input_nodes], 
+                    -1)
+            
+                for module in self.nn_layer_list[nn_layer_list_idx]:
+                    out = module(out)
+        
+                self.result_list = self.result_list + [out] 
+            
             else:
                 self.result_list = self.result_list + [self.nn_layer_list[nn_layer_list_idx](torch.concat(
                     [get_input_node(self, input_node = e, get_x = x) for e in input_nodes], 
-                    -1)).clone()]
+                    -1)).clone()]            
 
         return self.result_list[self.result_list_lookup['y_hat']]
 ```
@@ -836,10 +633,12 @@ model = NeuralNetwork(example_dict = kegg_connections,
                       example_dict_input_size = input_size_dict,
                       example_dict_output_size = output_size_dict,
                       example_dict_dropout_pr= dropout_pr_dict,
+                      example_block_rep_dict = block_rep_dict,
                       input_tensor_names = list(input_tensor_dict.keys()),
                       dependancy_order = dependancy_order) 
 model = model.to(device)
 # model(next(iter(training_dataloader))[1])
+# model
 ```
 
 ```{python}
@@ -852,8 +651,6 @@ class ListDataset(Dataset): # for any G containing matix with many (phno) to one
                            # tensors and then get the right genotype
                  obs_geno_lookup,
                  transform = None, target_transform = None,
-                 use_gpu_num = 0,
-                 device = 'cuda',
                  **kwargs 
                 ):
         self.device = device
@@ -884,9 +681,7 @@ training_dataloader = DataLoader(ListDataset(
         y = y_temp[train_idx][:, None].to('cuda'),
         x_list = [e.to('cuda') for e in x_list_temp],
         obs_idxs = train_idx, 
-        obs_geno_lookup = obs_geno_lookup, 
-        use_gpu_num = 0,
-        device = 'cuda',
+        obs_geno_lookup = obs_geno_lookup
     ),
     batch_size = dataloader_batch_size,
     shuffle = True
@@ -896,9 +691,7 @@ testing_dataloader = DataLoader(ListDataset(
         y = y_temp[test_idx][:, None].to('cuda'),
         x_list = [e.to('cuda') for e in x_list_temp],
         obs_idxs = test_idx, 
-        obs_geno_lookup = obs_geno_lookup,
-        use_gpu_num = 0,
-        device = 'cuda',
+        obs_geno_lookup = obs_geno_lookup
     ),
     batch_size = dataloader_batch_size,
     shuffle = True
@@ -911,18 +704,11 @@ testing_dataloader = DataLoader(ListDataset(
 ### Fit Model
 
 ```{python}
-run_epochs = 10
-dataloader_batch_size = 3000
-```
-
-```{python}
 training_dataloader = DataLoader(ListDataset(
         y = y_temp[train_idx][:, None].to('cuda'),
         x_list = [e.to('cuda') for e in x_list_temp],
         obs_idxs = train_idx, 
-        obs_geno_lookup = obs_geno_lookup, 
-        use_gpu_num = 0,
-        device = 'cuda',
+        obs_geno_lookup = obs_geno_lookup
     ),
     batch_size = dataloader_batch_size,
     shuffle = True
@@ -932,9 +718,7 @@ testing_dataloader = DataLoader(ListDataset(
         y = y_temp[test_idx][:, None].to('cuda'),
         x_list = [e.to('cuda') for e in x_list_temp],
         obs_idxs = test_idx, 
-        obs_geno_lookup = obs_geno_lookup,
-        use_gpu_num = 0,
-        device = 'cuda',
+        obs_geno_lookup = obs_geno_lookup
     ),
     batch_size = dataloader_batch_size,
     shuffle = True
@@ -942,33 +726,22 @@ testing_dataloader = DataLoader(ListDataset(
 ```
 
 ```{python}
-run_epochs = 2
-epochs_run = 0
-
-model, loss_df = train_nn_yx(
-    cache_path,
-    training_dataloader,
-    testing_dataloader,
-    model,
-    learning_rate = 1e-3,
-    batch_size = dataloader_batch_size,
-    epochs = (run_epochs - epochs_run)
-)
+# model, loss_df = train_nn_yx(
+#     cache_path,
+#     training_dataloader,
+#     testing_dataloader,
+#     model,
+#     learning_rate = 1e-3,
+#     batch_size = dataloader_batch_size,
+#     epochs = (2 - 0)
+# )
 ```
 
 ```{python}
 # (len(train_idx), dataloader_batch_size)
 ```
 
-
 ```{python}
-# epochs_run = 0
-```
-
-```{python}
-# dataloader_batch_size = 500
-# run_epochs = 100
-
 # don't run if either of these exist because there may be cases where we want the results but not the model
 import re
 
@@ -977,8 +750,10 @@ if not os.path.exists(cache_path+'/model.pt'):
     model = NeuralNetwork(example_dict = kegg_connections, 
                       example_dict_input_size = input_size_dict,
                       example_dict_output_size = output_size_dict,
+                      example_dict_dropout_pr= dropout_pr_dict,
+                      example_block_rep_dict = block_rep_dict,
                       input_tensor_names = list(input_tensor_dict.keys()),
-                      dependancy_order = dependancy_order) 
+                      dependancy_order = dependancy_order)
 
     # find the biggest model to save
     saved_models = os.listdir(cache_path)
@@ -1056,7 +831,6 @@ if not os.path.exists(cache_path+'/model.pt'):
 scale_dict = {'y1':YMat_cs}
 import plotly.graph_objects as go
 ```
-
 
 ```{python}
 naieve_yhat = training_dataloader.dataset.y.to('cpu').mean()
