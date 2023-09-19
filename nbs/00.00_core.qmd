@@ -77,6 +77,23 @@ def print_txt(path):
 #| '4': r
 #| '5': t
 
+def read_json(json_path
+             ):
+    "Read and return json. Used for train/validation/test splits"
+    import json
+    with open(json_path, 'r') as fp:
+        dat = json.load(fp)
+    return(dat)
+```
+
+```{python}
+#| '0': e
+#| '1': x
+#| '2': p
+#| '3': o
+#| '4': r
+#| '5': t
+
 def ensure_dir_path_exists(dir_path = '../ext_data' # Directory path to check
                           ):
     "Iteratively check for and create directories to store output. Ideally this would just be os.mkdirs() but that function is not available in this version of python"
