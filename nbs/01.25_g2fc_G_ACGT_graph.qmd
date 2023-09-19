@@ -16,6 +16,7 @@ jupyter: python3
 
 ```{python}
 import os, re, json
+from tqdm import tqdm
 
 import numpy as np
 import pandas as pd
@@ -25,8 +26,10 @@ import plotly.express as px
 import plotly.io as pio
 pio.templates.default = "plotly_white"
 
-# import hilbertcurve
-# from hilbertcurve.hilbertcurve import HilbertCurve
+import torch
+from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
+from torch import nn
 
 from EnvDL.core import * 
 # includes 
@@ -43,29 +46,12 @@ from EnvDL.dlfn import *
     # train_nn_yx
     # yhat_loop_yx
     
-from tqdm import tqdm
-
 from graphviz import Digraph
 # import torchviz
 ```
 
 ```{python}
-cache_path = '../nbs_artifacts/01.25_g2fc_G_ACGT_graph/'
-ensure_dir_path_exists(dir_path = cache_path)
-```
-
-```{python}
-dataloader_batch_size = 10#00
-# dataloader_batch_size = 8 #16 #64
-# run_epochs = 200
-
 use_gpu_num = 0
-
-# Imports --------------------------------------------------------------------
-import torch
-from torch.utils.data import Dataset
-from torch.utils.data import DataLoader
-from torch import nn
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 if use_gpu_num in [0, 1]: 
@@ -74,16 +60,21 @@ print(f"Using {device} device")
 ```
 
 ```{python}
+cache_path = '../nbs_artifacts/01.25_g2fc_G_ACGT_graph/'
+ensure_dir_path_exists(dir_path = cache_path)
+```
+
+```{python}
 # Settings:
 ## For graph linear blocks
 default_output_size = 50
-default_dropout_pr = 0.2
-default_block_reps = 2
+default_dropout_pr = 0.1
+default_block_reps = 1
 
 ## Training settings
 run_epochs = 10
 epochs_run = 0
-dataloader_batch_size = 3000
+dataloader_batch_size = 1000
 ```
 
 ## Functions
@@ -100,10 +91,6 @@ YMat = np.load(load_from+'YMat.npy')
 ```
 
 ```{python}
-# import pickle as pkl
-# with open('../data/zma/kegg/kegg_gene_entries.pkl', 'rb') as handle:
-#     parsed_kegg_gene_entries = pkl.load(handle)
-
 # Testing using the cleaned up version in '../nbs_artifacts/01.05_g2fc_demo_model/'
 load_from = '../nbs_artifacts/01.05_g2fc_demo_model/'
 parsed_kegg_gene_entries = get_cached_result(load_from+'filtered_kegg_gene_entries.pkl')
@@ -114,7 +101,6 @@ ACGT_gene_slice_list = get_cached_result(load_from+'ACGT_gene_slice_list.pkl')
 ```{python}
 assert len(ACGT_gene_slice_list) == len(parsed_kegg_gene_entries)
 ```
-
 
 ```{python}
 ## Create train/test validate indicies from json
@@ -143,7 +129,7 @@ val_dict = find_idxs_split_dict(
 )
 # val_dict
 
-test_dict
+# test_dict
 
 train_idx = test_dict['train_idx']
 test_idx  = test_dict['test_idx']
@@ -151,8 +137,8 @@ test_idx  = test_dict['test_idx']
 
 ```{python}
 # # FIXME
-train_idx = train_idx[0:100] # 81169 total
-test_idx = test_idx[0:100]
+# train_idx = train_idx[0:100] # 81169 total
+# test_idx = test_idx[0:100]
 # # 1/100th
 # train_idx = train_idx[0:3000] # 81169 total
 # test_idx = test_idx[0:3000]
@@ -209,7 +195,7 @@ print('Retaining '+ str(round(len(kegg_gene_brite)/len(parsed_kegg_gene_entries)
 ```
 
 ```{python}
-kegg_gene_brite[1]['BRITE']['BRITE_PATHS']
+# kegg_gene_brite[1]['BRITE']['BRITE_PATHS']
 ```
 
 ### Tiny `n`  gene version of the network:
@@ -408,8 +394,6 @@ for key in input_nodes:
                                # or that function needs to change.
 ```
 
--### Set up dict of input tensors
-
 ```{python}
 # build a dict to go from the node names in `no_dependants` to the list index in `ACGT_gene_slice_list`
 brite_node_to_list_idx_dict = {}
@@ -425,11 +409,10 @@ for e in no_dependants:
 # input_tensor_dict
 ```
 
--### Figure out expected input/output shapes
-
-_==NOTE! This assumes only dense connections!==_
-
 ```{python}
+# Figure out expected input/output shapes
+#==NOTE! This assumes only dense connections!==
+
 # This could be replaced by a sort of "distance from output" measure
 output_size_dict = dict(zip(dependancy_order, 
                         [default_output_size for i in range(len(dependancy_order))]))
@@ -521,7 +504,7 @@ y_temp = torch.from_numpy(y_cs).to(torch.float)#[:, None]
 x_list_temp[0].shape
 ```
 
-## Set up NeuralNetwork
+## Set up NeuralNetwork, Data Loader
 
 ```{python}
 # Working version ====
@@ -629,20 +612,19 @@ class NeuralNetwork(nn.Module):
 ```
 
 ```{python}
-model = NeuralNetwork(example_dict = kegg_connections, 
-                      example_dict_input_size = input_size_dict,
-                      example_dict_output_size = output_size_dict,
-                      example_dict_dropout_pr= dropout_pr_dict,
-                      example_block_rep_dict = block_rep_dict,
-                      input_tensor_names = list(input_tensor_dict.keys()),
-                      dependancy_order = dependancy_order) 
-model = model.to(device)
+# model = NeuralNetwork(example_dict = kegg_connections, 
+#                       example_dict_input_size = input_size_dict,
+#                       example_dict_output_size = output_size_dict,
+#                       example_dict_dropout_pr= dropout_pr_dict,
+#                       example_block_rep_dict = block_rep_dict,
+#                       input_tensor_names = list(input_tensor_dict.keys()),
+#                       dependancy_order = dependancy_order) 
+# model = model.to(device)
 # model(next(iter(training_dataloader))[1])
 # model
 ```
 
 ```{python}
-# cleaned up version
 class ListDataset(Dataset): # for any G containing matix with many (phno) to one (geno)
     def __init__(self, 
                  y, 
@@ -675,8 +657,9 @@ class ListDataset(Dataset): # for any G containing matix with many (phno) to one
             x_idx = [self.transform(x) for x in x_idx]
             
         return y_idx, x_idx
-    
-    
+```
+
+```{python}
 training_dataloader = DataLoader(ListDataset(
         y = y_temp[train_idx][:, None].to('cuda'),
         x_list = [e.to('cuda') for e in x_list_temp],
@@ -698,31 +681,6 @@ testing_dataloader = DataLoader(ListDataset(
 )
 
 # next(iter(training_dataloader))[1]
-    
-```
-
-### Fit Model
-
-```{python}
-training_dataloader = DataLoader(ListDataset(
-        y = y_temp[train_idx][:, None].to('cuda'),
-        x_list = [e.to('cuda') for e in x_list_temp],
-        obs_idxs = train_idx, 
-        obs_geno_lookup = obs_geno_lookup
-    ),
-    batch_size = dataloader_batch_size,
-    shuffle = True
-)
-
-testing_dataloader = DataLoader(ListDataset(
-        y = y_temp[test_idx][:, None].to('cuda'),
-        x_list = [e.to('cuda') for e in x_list_temp],
-        obs_idxs = test_idx, 
-        obs_geno_lookup = obs_geno_lookup
-    ),
-    batch_size = dataloader_batch_size,
-    shuffle = True
-)
 ```
 
 ```{python}
@@ -737,9 +695,7 @@ testing_dataloader = DataLoader(ListDataset(
 # )
 ```
 
-```{python}
-# (len(train_idx), dataloader_batch_size)
-```
+## Fit Model
 
 ```{python}
 # don't run if either of these exist because there may be cases where we want the results but not the model
@@ -825,7 +781,7 @@ if not os.path.exists(cache_path+'/model.pt'):
 # )
 ```
 
-### Standard Visualizations
+## Standard Visualizations
 
 ```{python}
 scale_dict = {'y1':YMat_cs}
@@ -888,5 +844,4 @@ fig.show()
 #              marginal="box", # can be `rug`, `violin`
 #              nbins= 50)
 ```
-
 
