@@ -2,6 +2,7 @@
 # downloaded for testing out nbs
 /nbs/data
 /nbs/*.csv
+/nbs/tb_logs/*
 
 # From the project structure: -------------------------------------------------
 /data

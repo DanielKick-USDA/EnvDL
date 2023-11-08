@@ -4,10 +4,10 @@
 __all__ = ['taxa_to_filename', 'exists_geno', 'find_geno', 'get_geno', 'list_to_ACGT', 'calc_needed_hilbert_p',
            'np_2d_to_hilbert', 'np_3d_to_hilbert']
 
-# %% ../nbs/00.01_core_dna.ipynb 8
+# %% ../nbs/00.01_core_dna.ipynb 10
 def taxa_to_filename(taxa = '05-397/250007467', delim = '/'): return(taxa.replace(delim, '__'))
 
-# %% ../nbs/00.01_core_dna.ipynb 11
+# %% ../nbs/00.01_core_dna.ipynb 13
 def exists_geno(
     taxa, # should be the desired taxa or a regex fragment (stopping before the __). E.g. 'B73' or 'B\d+'
     **kwargs # optionally pass in a genome list (this allows for a different path or precomputing if we're finding a lot of genomes)
@@ -26,7 +26,7 @@ def exists_geno(
         
     return(True in [True for e in genome_files if e == taxa])
 
-# %% ../nbs/00.01_core_dna.ipynb 14
+# %% ../nbs/00.01_core_dna.ipynb 16
 def find_geno(
     taxa, # should be the desired taxa or a regex fragment (stopping before the __). E.g. 'B73' or 'B\d+'
     **kwargs # optionally pass in a genome list (this allows for a different path or precomputing if we're finding a lot of genomes)
@@ -46,7 +46,7 @@ def find_geno(
     import re
     return( [e for e in genome_files if re.match(taxa+'__.+', e)] )
 
-# %% ../nbs/00.01_core_dna.ipynb 16
+# %% ../nbs/00.01_core_dna.ipynb 18
 def get_geno( 
     taxa,
     **kwargs 
@@ -63,7 +63,7 @@ def get_geno(
     return(data)
 
 
-# %% ../nbs/00.01_core_dna.ipynb 27
+# %% ../nbs/00.01_core_dna.ipynb 29
 def list_to_ACGT(
     in_seq, # This should be a list with strings corresponding to IUPAC codes e.g. ['A', 'C', 'Y']
     progress = False
@@ -123,7 +123,7 @@ def list_to_ACGT(
     return(GMat)
 
 
-# %% ../nbs/00.01_core_dna.ipynb 29
+# %% ../nbs/00.01_core_dna.ipynb 31
 def calc_needed_hilbert_p(n_needed = 1048576,
                           max_p = 20):
     out = None
@@ -133,7 +133,7 @@ def calc_needed_hilbert_p(n_needed = 1048576,
             break
     return(out)
 
-# %% ../nbs/00.01_core_dna.ipynb 30
+# %% ../nbs/00.01_core_dna.ipynb 32
 def np_2d_to_hilbert(
     in_seq # This should be a 2d numpy array with dimensions of [sequence, channels] 
 ):
@@ -172,7 +172,7 @@ def np_2d_to_hilbert(
 
     return(temp_mat)
 
-# %% ../nbs/00.01_core_dna.ipynb 31
+# %% ../nbs/00.01_core_dna.ipynb 33
 def np_3d_to_hilbert(
     in_seq # This should be a 3d numpy array with dimensions of [samples, sequence, channels] 
 ):
