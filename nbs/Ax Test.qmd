@@ -1,0 +1,312 @@
+---
+jupyter:
+  kernelspec:
+    display_name: conda-env-EnvDL-py
+    language: python
+    name: conda-env-EnvDL-py
+---
+
+```{python}
+# from ax.service.ax_client import AxClient, ObjectiveProperties
+# from ax.utils.measurement.synthetic_functions import hartmann6
+# from ax.utils.notebook.plotting import render, init_notebook_plotting
+
+# init_notebook_plotting()
+```
+
+```{python}
+# Initialize
+ax_client = AxClient()
+```
+
+```{python}
+# must have
+# name
+# type - range, choice, fixed
+    # # if range
+    # bounds - []
+    # # if choice
+    # values - 
+    # # if fixed
+    # value - 
+
+param_list = [
+        {
+            "name": "x1",
+            "type": "range",
+            "bounds": [0.0, 1.0],
+            "value_type": "float",  # Optional, defaults to inference from type of "bounds".
+            "log_scale": False,  # Optional, defaults to False.
+        },
+        {
+            "name": "x2",
+            "type": "range",
+            "bounds": [0.0, 1.0],
+        },
+        {
+            "name": "x3",
+            "type": "range",
+            "bounds": [0.0, 1.0],
+        },
+        {
+            "name": "x4",
+            "type": "range",
+            "bounds": [0.0, 1.0],
+        },
+        {
+            "name": "x5",
+            "type": "range",
+            "bounds": [0.0, 1.0],
+        },
+        {
+            "name": "x6",
+            "type": "range",
+            "bounds": [0.0, 1.0],
+        },
+    ]
+```
+
+```{python}
+ax_client.create_experiment(
+    name="hartmann_test_experiment",
+    parameters=param_list,                                        # Required
+    objectives={"hartmann6": ObjectiveProperties(minimize=True)}, # Required
+    parameter_constraints=["x1 + x2 <= 2.0"],
+    outcome_constraints=["l2norm <= 1.25"],
+)
+```
+
+```{python}
+import numpy as np
+
+
+def evaluate(parameters):
+    x = np.array([parameters.get(f"x{i+1}") for i in range(6)])
+    # In our case, standard error is 0, since we are computing a synthetic function.
+    return {"hartmann6": (hartmann6(x), 0.0), "l2norm": (np.sqrt((x**2).sum()), 0.0)}
+```
+
+```{python}
+
+
+for i in range(25):
+    parameters, trial_index = ax_client.get_next_trial()
+    # Local evaluation here can be replaced with deployment to external system.
+    ax_client.complete_trial(trial_index=trial_index, raw_data=evaluate(parameters))
+
+```
+
+```{python}
+ax_client.generation_strategy.trials_as_df
+```
+
+```{python}
+best_parameters, values = ax_client.get_best_parameters()
+best_parameters
+```
+
+```{python}
+ax_client.get_best_parameters()
+```
+
+```{python}
+means, covariances = values
+means
+```
+
+```{python}
+hartmann6.fmin
+```
+
+```{python}
+render(ax_client.get_contour_plot())
+```
+
+```{python}
+# ax_client.save_to_json_file()  # For custom filepath, pass `filepath` argument.
+
+# restored_ax_client = (
+#     AxClient.load_from_json_file()
+# )  # For custom filepath, pass `filepath` argument.
+```
+
+
+
+
+
+```{python}
+import torch
+
+from ax.service.ax_client import AxClient, ObjectiveProperties
+from ax.service.utils.report_utils import exp_to_df
+from ax.utils.notebook.plotting import init_notebook_plotting, render
+from ax.utils.tutorials.cnn_utils import evaluate, load_mnist, train
+
+import torch.nn as nn
+import torch.nn.functional as F
+from torch._tensor import Tensor
+from torch.utils.data import DataLoader
+
+init_notebook_plotting()
+```
+
+```{python}
+torch.manual_seed(42)
+dtype = torch.float
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+```
+
+```{python}
+BATCH_SIZE = 512
+train_loader, valid_loader, test_loader = load_mnist(batch_size=BATCH_SIZE)
+```
+
+```{python}
+ax_client = AxClient()
+```
+
+```{python}
+# Create an experiment with required arguments: name, parameters, and objective_name.
+ax_client.create_experiment(
+    name="tune_cnn_on_mnist",  # The name of the experiment.
+    parameters=[
+        {
+            "name": "lr",  # The name of the parameter.
+            "type": "range",  # The type of the parameter ("range", "choice" or "fixed").
+            "bounds": [1e-6, 0.4],  # The bounds for range parameters. 
+            # "values" The possible values for choice parameters .
+            # "value" The fixed value for fixed parameters.
+            "value_type": "float",  # Optional, the value type ("int", "float", "bool" or "str"). Defaults to inference from type of "bounds".
+            "log_scale": True,  # Optional, whether to use a log scale for range parameters. Defaults to False.
+            # "is_ordered" Optional, a flag for choice parameters.
+        },
+        {
+            "name": "momentum",  
+            "type": "range",  
+            "bounds": [0.0, 1.0],  
+        },
+    ],
+    objectives={"accuracy": ObjectiveProperties(minimize=False)},  # The objective name and minimization setting.
+    # parameter_constraints: Optional, a list of strings of form "p1 >= p2" or "p1 + p2 <= some_bound".
+    # outcome_constraints: Optional, a list of strings of form "constrained_metric <= some_bound".
+)
+```
+
+```{python}
+class CNN(nn.Module):
+    
+    def __init__(self) -> None:
+        super().__init__()
+        self.conv1 = nn.Conv2d(1, 20, kernel_size=5, stride=1)
+        self.fc1 = nn.Linear(8 * 8 * 20, 64)
+        self.fc2 = nn.Linear(64, 10)
+
+    def forward(self, x: Tensor) -> Tensor:
+        x = F.relu(self.conv1(x))
+        x = F.max_pool2d(x, 3, 3)
+        x = x.view(-1, 8 * 8 * 20)
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        return F.log_softmax(x, dim=-1)
+```
+
+```{python}
+def train_evaluate(parameterization):
+    """
+    Train the model and then compute an evaluation metric.
+
+    In this tutorial, the CNN utils package is doing a lot of work
+    under the hood:
+        - `train` initializes the network, defines the loss function
+        and optimizer, performs the training loop, and returns the
+        trained model.
+        - `evaluate` computes the accuracy of the model on the
+        evaluation dataset and returns the metric.
+
+    For your use case, you can define training and evaluation functions
+    of your choosing.
+
+    """
+    net = CNN()
+    net = train(
+        net=net,
+        train_loader=train_loader,
+        parameters=parameterization,
+        dtype=dtype,
+        device=device,
+    )
+
+    return evaluate(
+        net=net, 
+        data_loader=valid_loader, 
+        dtype=dtype, 
+        device=device,
+    )
+```
+
+```{python}
+# add in some custom values to be tested
+```
+
+```{python}
+# Attach the trial
+ax_client.attach_trial(
+    parameters={"lr": 0.000026, "momentum": 0.58}
+)
+
+# Get the parameters and run the trial 
+baseline_parameters = ax_client.get_trial_parameters(trial_index=0)
+ax_client.complete_trial(trial_index=0, raw_data=train_evaluate(baseline_parameters))
+```
+
+```{python}
+for i in range(25):
+    parameters, trial_index = ax_client.get_next_trial()
+    # Local evaluation here can be replaced with deployment to external system.
+    ax_client.complete_trial(trial_index=trial_index, raw_data=train_evaluate(parameters))
+```
+
+```{python}
+ax_client.get_max_parallelism() 
+
+#   Number of Trials
+#   |  Max paralelism
+# [(5, 5), (-1, 3)]
+#
+# 5 for the first 5 trials and 3 for all other trials
+```
+
+```{python}
+ax_client.get_trials_data_frame()
+```
+
+```{python}
+best_parameters, values = ax_client.get_best_parameters()
+best_parameters
+```
+
+```{python}
+mean, covariance = values
+mean
+```
+
+```{python}
+render(ax_client.get_contour_plot(param_x="lr", param_y="momentum", metric_name="accuracy"))
+```
+
+```{python}
+render(
+    ax_client.get_optimization_trace()
+)  
+```
+
+
+
+
+
+
+
+
+
+
+
