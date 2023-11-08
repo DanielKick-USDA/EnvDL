@@ -1,0 +1,770 @@
+---
+title: Soil Data
+jupyter: python3
+---
+
+```{python}
+import os, re
+import sqlite3
+import json # for Soils.apsimx
+import numpy as np # for cumulative sum in calculating depth
+import pandas as pd
+from tqdm import tqdm
+
+from EnvDL.core import *
+```
+
+```{python}
+new_sims_are_running = False # if there are new simulations running then ignore the latest one just in case
+```
+
+```{python}
+cache_path = '../nbs_artifacts/99.99_apsimx_agg/'
+ensure_dir_path_exists(dir_path = cache_path)
+```
+
+
+
+
+
+### Load in data/lookups
+
+```{python}
+base_path = '../../apsimxSimData/data/00.06_apsimx_sim_factorial_gps_grid/'
+
+soil_i_lookup = pd.read_csv(base_path + 'gps_grid_soil_match.csv', index_col=False)
+soil_i_lookup.head()
+```
+
+```{python}
+soils_df = pd.read_csv('../../apsimxSimData/data/00.06_apsimx_sim_factorial_gps_grid/soils_df.csv')
+soils_df.head()
+```
+
+```{python}
+ssurgo_wide = pd.read_csv('../../apsimxSimData/data/00.06_apsimx_sim_factorial_gps_grid/ssurgo/ssurgo_wide.csv')
+ssurgo_wide.head()
+```
+
+```{python}
+ssurgo_long = pd.read_csv('../../apsimxSimData/data/00.06_apsimx_sim_factorial_gps_grid/ssurgo/ssurgo_long.csv')
+ssurgo_long.head()
+```
+
+### Parse Soils.apsimx into tabular data
+
+
+```{python}
+# This funciton parses subsections of the Soils apsimx (json) file and formats it to match soils_df.csv 
+def apsimx_json_soil_to_df(soil_subsection):
+    res = []
+    entries = ['State','Region','Latitude','Longitude','SoilType','ApsoilNumber','Comments','Name']
+    temp = [[e, soil_subsection[e]] for e in entries]
+    res.extend(temp)
+
+    entries = ['Thickness','ParticleSizeClay','ParticleSizeSilt','ParticleSizeSand','BD','AirDry',
+               'LL15','DUL','SAT','KS']
+    temp = [[e, soil_subsection['Children'][0][e]] for e in entries]
+    res.extend(temp)
+
+    # Get maize soil, wheat soil, etc and rename based on crop
+    for i in range(len(soil_subsection['Children'][0]['Children'])):
+        prefix = soil_subsection['Children'][0]['Children'][i]['Name'].replace('Soil', '')
+        prefix = prefix[0].upper()+prefix[1:]
+        entries = ['LL', 'KL', 'XF']
+        temp = [[prefix+'.'+e, soil_subsection['Children'][0]['Children'][i][e]] for e in entries]
+        res.extend(temp)
+
+    # manually add in depth
+    res.extend([['Depth', list(np.cumsum(soil_subsection['Children'][1]['Thickness']))]])    
+
+    entries = ['FOMCNRatio','Carbon','SoilCNRatio','FOM','FBiom','FInert']
+    temp = [[e, soil_subsection['Children'][2][e]] for e in entries]
+    temp = [e if e[0]!= 'FOMCNRatio' else ['FOM.CN', e[1]] for e in temp] # rename 'FOMCNRatio' -> 'FOM.CN',
+    res.extend(temp)
+
+    entries = ['PH']
+    temp = [[e, soil_subsection['Children'][3][e]] for e in entries]
+    res.extend(temp)
+
+    entries = ['InitialValues'] # 'NO3N', name is 'NO3'
+    temp = [['NO3N', soil_subsection['Children'][7][e]] for e in entries]
+    res.extend(temp)
+
+    entries = ['InitialValues'] # 'NH4N', name is NH4
+    temp = [['NH4N', soil_subsection['Children'][8][e]] for e in entries]
+    res.extend(temp)
+
+    # pass 1. the second entry must be a list.
+    res = [e if list == type(e[1]) else [e[0], [e[1]] ] for e in res]
+
+    # pass 2. find max len
+    res_lens = [len(e[1]) for e in res]
+
+    # confirm all lists are lenght 1 or max lenght
+    assert [] == [e for e in res_lens if not (e == 1 or e == max(res_lens))]
+
+    # pass 3. expand single values so this can be converted to a df
+    res = [
+        [res[i][0], [res[i][1][0] for j in range(max(res_lens))]]
+        if res_lens[i] == 1 else
+        res[i]
+        for i in range(len(res))
+    ]
+
+    # now convert to dict
+    res_d = {}
+    for e in res:
+        res_d[e[0]] = e[1]
+
+    res_d = pd.DataFrame(res_d)
+
+    return(res_d)
+```
+
+```{python}
+## Convert apsimx's soils into a table
+# if not os.path.exists(cache_path+'apsimx_soils_df.csv'):
+with open('../../apsimxSimData/inst/extdata/Soils.apsimx', 'r') as f:
+    dat = json.load(f)
+
+apsimx_soils = []
+# there's one out of place so I'll add that manually.
+apsimx_soils.append(                                            # US Soils     # Iowa
+    apsimx_json_soil_to_df(soil_subsection = dat['Children'][1]['Children'][0]['Children'][0]))
+
+for i in tqdm(range(len(dat['Children'][1]['Children']))):
+    i_state = dat['Children'][1]['Children'][i]
+
+    for j in range(len(i_state['Children'])):
+        i_county = i_state['Children'][j]
+
+        for k in range(len(i_county['Children'])):
+            i_entry = i_county['Children'][k]
+            # confirm that type is right because there is one entry (Iowa Tama No133) that is out of place
+
+            if i_entry['$type'] != 'Models.Soils.Soil, Models':
+                pass
+            else:
+                apsimx_soils.append(
+                    apsimx_json_soil_to_df(soil_subsection = i_entry))
+
+# confirm that each entry has the same colums and that they're in the same order
+apsimx_soils_lens = [len(list(e)) for e in apsimx_soils]
+# check that all are the same length
+assert False == (False in [True if e == max(apsimx_soils_lens) else False for e in apsimx_soils_lens ])
+# check that all have the same entries
+assert max([
+    len([ee for ee in list(e) if ee not in list(apsimx_soils[0])])
+    for e in apsimx_soils]) == 0
+
+# set the order for each 
+apsimx_soils = [e.loc[:, list(apsimx_soils[0]) ] for e in apsimx_soils]
+
+apsimx_soils = pd.concat(apsimx_soils)    
+    
+#     apsimx_soils.to_csv(cache_path+'apsimx_soils_df.csv', index=False)
+# else:
+#     apsimx_soils = pd.read_csv(cache_path+'apsimx_soils_df.csv')
+```
+
+```{python}
+apsimx_soils.head()
+```
+
+### Retrieve Data for a `soils_list_i` 
+
+```{python}
+ssurgo_long = ssurgo_long.rename(columns={'longitude':'Longitude', 'latitude': 'Latitude'})
+
+# convert Depth column to match apsimx_soils
+ssurgo_long.Depth = [10*int(e.split('-')[-1]) for e in ssurgo_long.Depth]
+
+# standardize names
+soil_col_names = [e for e in list(apsimx_soils) if e in list(ssurgo_long)]
+
+# overwrite with manually sorted names
+soil_col_names = [
+    'Latitude','Longitude','Depth', 'Thickness',
+    'ParticleSizeClay','ParticleSizeSilt','ParticleSizeSand','BD','AirDry','LL15','DUL','SAT','KS',
+    'FOM.CN','Carbon','SoilCNRatio','FOM','FBiom','FInert',
+    'PH','NO3N','NH4N',
+    'Maize.LL','Maize.KL','Maize.XF','Soybean.LL','Soybean.KL','Soybean.XF']
+```
+
+```{python}
+# add annotations of soils_list_i
+apsimx_soils['soils_list_i'] = np.nan
+
+for i in soils_df.soils_list_i.values:
+    mask = (apsimx_soils.ApsoilNumber == str(i))
+    apsimx_soils.loc[mask, 'soils_list_i'] = i
+```
+
+```{python}
+# reduce and order names
+ssurgo_long = ssurgo_long.loc[:, soil_col_names]
+apsimx_soils = apsimx_soils.loc[:, ['soils_list_i']+soil_col_names]
+```
+
+```{python}
+apsimx_soils.head()
+```
+
+```{python}
+# Impute measurements so that each observation has an equal dumber of depths.
+lat = ssurgo_long.Latitude[0]
+lon = ssurgo_long.Longitude[0]
+
+df = ssurgo_long.loc[((ssurgo_long.Latitude == lat) & 
+                 (ssurgo_long.Longitude == lon)), ].sort_values('Depth')
+```
+
+```{python}
+# creates a numpy array with length 200 for depth with depths linearly imputed
+# assumes that the df is sorted by depth
+def ssurgo_slice_to_np(df, cols):
+    df = df.sort_values('Depth')
+    depths = [i for i in range(10, 2010, 10)]
+    # output should be every 10 units down to 2000 below
+    res = np.zeros((len(depths), len(cols)))
+
+    # i = 0
+    for i in range(len(depths)):
+        depth = depths[i]
+        bounds = [df.loc[(df.Depth < depth), 'Depth'].max(), 
+                  df.loc[(df.Depth >= depth), 'Depth'].min()]
+        # check if there are nans
+        bounds = [e for e in bounds if e == e]
+#         print(bounds)
+#         print(depth)
+#         print(df.Depth)
+#         print(df.loc[(df.Depth.isin(bounds)), cols].drop_duplicates())
+        if len(bounds) == 1:
+            temp = np.array(df.loc[(df.Depth.isin(bounds)), cols].drop_duplicates())
+            assert temp.shape[0] == 1
+            res[i, ] = temp
+        else:
+            temp = np.array(df.loc[(df.Depth.isin(bounds)), cols].drop_duplicates())
+            assert temp.shape[0] == 2
+            res[i, ] = (temp[0, :]+(depth-bounds[0])*((temp[0, :] - temp[1, :])/(bounds[1]-bounds[0])))            
+    return(res)
+```
+
+```{python}
+cols = [
+    'ParticleSizeClay',
+    'ParticleSizeSilt',
+    'ParticleSizeSand',
+    'BD',
+    'AirDry',
+    'LL15',
+    'DUL',
+    'SAT',
+    'KS',
+    'FOM.CN',
+    'Carbon',
+    'SoilCNRatio',
+    'FOM',
+    'FBiom',
+    'FInert',
+    'PH',
+    'NO3N',
+    'NH4N',
+    'Maize.LL',
+    'Maize.KL',
+    'Maize.XF',
+    'Soybean.LL','Soybean.KL','Soybean.XF']
+```
+
+```{python}
+# ssurgo_slice_to_np(df = ssurgo_long.loc[
+#     ((ssurgo_long.Latitude == lat) & 
+#      (ssurgo_long.Longitude == lon)), ], cols = cols)
+```
+
+
+```{python}
+ssurgo_slice_to_np(df = apsimx_soils.loc[(apsimx_soils.soils_list_i == 133.)], cols = cols)
+```
+
+```{python}
+## Process ssurgo_long
+if not os.path.exists(cache_path+'ssurgo_np.npy'):
+    temp = ssurgo_long.loc[:, ['Latitude', 'Longitude']].drop_duplicates().reset_index(drop = True).copy()
+
+    res_lookup = np.zeros((temp.shape[0], 2))
+    res = np.zeros((temp.shape[0], 200, len(cols)))
+    for i in tqdm(temp.index):
+        i_lat, i_lon = temp.loc[i, ['Latitude', 'Longitude']]
+        res_lookup[i, :] = i_lon, i_lat
+
+        mask = ((ssurgo_long.Latitude == i_lat) & (ssurgo_long.Longitude == i_lon))
+        res[i, :, :] = ssurgo_slice_to_np(df = ssurgo_long.loc[mask, ], cols = cols)
+
+    ssurgo_np = res.copy()
+    ssurgo_np_lonlat = res_lookup.copy()  
+    
+    np.save(cache_path+'ssurgo_np.npy', ssurgo_np)
+    np.save(cache_path+'ssurgo_np_lonlat.npy', ssurgo_np_lonlat)
+else:
+    ssurgo_np = np.load(cache_path+'ssurgo_np.npy')
+    ssurgo_np_lonlat = np.load(cache_path+'ssurgo_np_lonlat.npy')
+```
+
+```{python}
+## Process apsimx_soils
+if not os.path.exists(cache_path+'soils_np_i.npy'):
+    temp = apsimx_soils.loc[:, ['Latitude', 'Longitude', 'soils_list_i']].drop_duplicates().reset_index(drop = True).copy()
+
+    res_lookup = np.zeros((temp.shape[0], 3))
+    res = np.zeros((temp.shape[0], 200, len(cols)))
+    for i in tqdm(temp.index):
+        i_lat, i_lon, soils_list_i= temp.loc[i, ['Latitude', 'Longitude', 'soils_list_i']]
+        res_lookup[i, :] = i_lon, i_lat, soils_list_i
+
+        # in case either soil i or lonlat is nan
+        if (np.isnan(soils_list_i)):
+            mask = ((apsimx_soils.Latitude == i_lat
+                ) & (apsimx_soils.Longitude == i_lon))
+        elif (np.isnan(i_lat) or np.isnan(i_lon)):
+            mask = ((apsimx_soils.soils_list_i == soils_list_i))
+        else:
+            mask = ((apsimx_soils.Latitude == i_lat
+                ) & (apsimx_soils.Longitude == i_lon
+                ) & (apsimx_soils.soils_list_i == soils_list_i))
+
+        res[i, :, :] = ssurgo_slice_to_np(df = apsimx_soils.loc[mask, ], cols = cols)
+
+    soils_np_i = res.copy()
+    soils_np_i_lonlati = res_lookup.copy()  
+    
+    np.save(cache_path+'soils_np_i.npy', soils_np_i)
+    np.save(cache_path+'soils_np_i_lonlati.npy', soils_np_i_lonlati)
+else:
+    soils_np_i = np.load(cache_path+'soils_np_i.npy')
+    soils_np_i_lonlati = np.load(cache_path+'soils_np_i_lonlati.npy')
+```
+
+## Retrieving POWER data (met files)
+
+```{python}
+met_dir = '../../apsimxSimData/data/00.06_apsimx_sim_factorial_gps_grid/power/'
+met_files = [e for e in os.listdir(met_dir) if re.match('.+_1984-01-01_2022-12-31.met$', e)]
+```
+
+```{python}
+def parse_met_df(met_path):
+    met_meta = pd.read_table(met_path, skiprows=0).loc[0:6, ]
+    data_cols = list(met_meta.loc[6,])[0].split(' ')
+    met_meta = pd.DataFrame([list(met_meta.loc[i,])[0].split(' = ') for i in range(2, 6)], columns = ['variable', 'value'])
+
+    met_data = pd.read_table(met_path, skiprows=9, sep=' ', names=data_cols)
+    return(met_data, met_meta)
+```
+
+```{python}
+met_data, met_meta = parse_met_df(met_path = met_dir+met_files[0] )
+print(met_data.head())
+print(met_meta.head())
+```
+
+```{python}
+if not os.path.exists(cache_path+'met_np.npy'):
+    # convert to a reasonable representation
+    met_np_list = []
+    met_np_lonlatyear_list = []
+
+    for ii in tqdm(range(len(met_files))):
+        met_file = met_files[ii]
+        met_data, met_meta = parse_met_df(met_path = met_dir+met_file )
+
+        met_data['tav'] = met_meta.loc[(met_meta.variable == 'tav'), 'value'].values[0]
+        met_data['amp'] = met_meta.loc[(met_meta.variable == 'amp'), 'value'].values[0]
+
+        met_np = np.zeros((2022-1984, 365, 8))
+        for year in range(1984, 2022):
+        #     print(year-1984)
+            temp = met_data.loc[
+                ((met_data.year == year) & (met_data.day <= 365)), 
+            ].sort_values('day'
+            ).loc[:, ['radn', 'maxt', 'mint', 'rain', 'rh', 'windspeed', 'tav', 'amp']]
+
+            for e in list(temp):
+                temp[e] = temp[e].astype(float)
+            temp = np.array(temp)
+            met_np[(year-1984), :, :] = temp
+
+        met_np_lonlatyear = np.array([
+            [float(i) for i in range(1984, 2022)],
+            [float(i) for i in range(1984, 2022)],
+            [float(i) for i in range(1984, 2022)]]).swapaxes(0,1)
+
+        met_np_lonlatyear[:, 0] = met_meta.loc[(met_meta.variable == 'longitude'), 'value'].values[0]
+        met_np_lonlatyear[:, 1] = met_meta.loc[(met_meta.variable == 'latitude'), 'value'].values[0]
+
+        met_np_list.append(met_np)
+        met_np_lonlatyear_list.append(met_np_lonlatyear)
+
+    met_np = np.concatenate(met_np_list, axis = 0)
+    met_np_lonlatyear = np.concatenate(met_np_lonlatyear_list, axis = 0)    
+    
+    np.save(cache_path+'met_np.npy', met_np)
+    np.save(cache_path+'met_np_lonlatyear.npy', met_np_lonlatyear)
+else:
+    met_np = np.load(cache_path+'met_np.npy')
+    met_np_lonlatyear = np.load(cache_path+'met_np_lonlatyear.npy')
+```
+
+## Db processing
+
+```{python}
+db_directory = '../../apsimxSimData/data/00.06_apsimx_sim_factorial_gps_grid/cultivar_sim_exps/'
+```
+
+### Prepare metadata tables
+
+```{python}
+# High level: Let's get all the metadata tables together then draw what I want from the results tables as needed.
+```
+
+```{python}
+# find all the ones that aren't currently running (i.e. look at ctime, don't get the newest)
+# sim_cultivars = [e for e in os.listdir(db_directory) if re.match('^sim_\\d+_\\d+\\.sqlite$', e)]
+# include sim_cultivar.sqlite 
+sim_cultivars = [e for e in os.listdir(db_directory) if re.match('^sim_.+\\.sqlite$', e)]
+
+df = pd.DataFrame(zip(
+    [e for e in sim_cultivars],
+    [os.path.getctime(db_directory+e) for e in sim_cultivars],
+    [os.path.getsize(db_directory+e) for e in sim_cultivars]
+),  columns = ['name', 'ctime', 'size'])
+
+df = df.sort_values('ctime').reset_index(drop = True)
+if new_sims_are_running:
+    # drop the latest one just in case
+    df = df.loc[~(df.index == max(df.index)), ]
+sim_cultivars = df
+sim_cultivars.head()
+```
+
+```{python}
+# [('DefaultCultivarsAll',), ('Genotypes',), ('Ids',), ('Results',)]
+def get_full_table(db_directory, db_name, table = 'Genotypes'):
+    sql_query = 'SELECT * FROM '+table
+    with sqlite3.connect(db_directory+db_name) as conn:
+        df = pd.read_sql(sql=sql_query, con = conn)
+    df['sqlite'] = db_name
+    return(df)
+
+
+get_full_table(db_directory, db_name = 'sim_1695672661_86607.sqlite').tail()
+```
+
+```{python}
+genotypes = [get_full_table(db_directory = db_directory, db_name = e, table = 'Genotypes') 
+             for e in list(sim_cultivars.name)]
+genotypes = pd.concat(genotypes)
+# there are a ton of default Genotypes that show up multiple times. I'll only keep defaults from sim_cultivar.sqlite
+
+mask = ((genotypes.Genotype.isin(genotypes.Genotype)) & (genotypes.sqlite == 'sim_cultivar.sqlite'))
+default_genotypes = genotypes.loc[mask, ].copy()
+
+mask = (genotypes.Genotype.isin([e for e in list(default_genotypes.Genotype) if not re.match('Cultivar\\d+', e)]))
+genotypes = genotypes.loc[~mask, ].copy()
+
+genotypes = pd.concat([default_genotypes, genotypes]).reset_index(drop = True)
+
+
+for e in [e for e in list(genotypes) if not e in ['Genotype', 'sqlite']]:
+    genotypes[e] = genotypes[e].astype(float)
+    
+genotypes
+```
+
+### Prepare date info
+
+```{python}
+# convert days since 1970 to date -> doy
+# I'll have to do this enought that I'll pre-compute it.
+import datetime
+from datetime import date
+
+max_days = (date(2023, 1, 1) - date(1970, 1, 1)).days
+possible_days = [i for i in range(max_days)]
+possible_dates = [date(1970, 1, 1)+datetime.timedelta(i) for i in possible_days]
+possible_year = [e.year for e in possible_dates]
+# 0 indexed
+possible_doy = [(possible_dates[i] - date(possible_dates[i].year, 1, 1)).days for i in range(len(possible_dates))]
+
+unix_date_lookup = pd.DataFrame(
+    zip(possible_days,
+        possible_dates,
+        possible_year,
+        possible_doy),
+    columns=['unix_day',
+             'date',
+             'year',
+             'doy'])
+
+# constrain to tested range (1984-2022)
+unix_date_lookup = unix_date_lookup.loc[(unix_date_lookup.year >= 1984), ].reset_index(drop = True)
+unix_date_lookup
+```
+
+```{python}
+# turn `SowDate` into doy into which days are allowed to have value (seed in ground, force harvest at day 365)
+def add_planted_to_date_lookup(unix_date_lookup,
+                               SowDate = "20-Feb"):
+    years = list(set(unix_date_lookup['year']))
+    dm = SowDate.split('-')
+    dm[1] = {'Jan':'1',
+            'Feb':'2',
+            'Mar':'3',
+            'Apr':'4',
+            'May':'5',
+            'Jun':'6',
+            'Jul':'7',
+            'Aug':'8',
+            'Sep':'9',
+            'Oct':'10',
+            'Nov':'11',
+            'Dec':'12'}[dm[1]]
+    # pd.DataFrame([[e, (date(e, int(dm[1]), int(dm[0])) - date(e, 1, 1)).days]
+    #               for e in  years], columns= ['year','doy'])
+    planting_list = [[e, (date(e, int(dm[1]), int(dm[0])) - date(e, 1, 1)).days] for e in  years]
+
+    unix_date_lookup['planted'] = 0
+
+    for i_year, i_doy in planting_list:
+        mask = ((unix_date_lookup.year == i_year) & (unix_date_lookup.doy >= i_doy))
+        unix_date_lookup.loc[mask, 'planted'] = 1
+    return(unix_date_lookup)
+```
+
+```{python}
+add_planted_to_date_lookup(unix_date_lookup, SowDate = "20-Feb")
+```
+
+### Looking at one cultivar
+
+```{python}
+db_name = 'sim_1696254953_21795.sqlite'
+```
+
+```{python}
+sql_query = """
+SELECT * FROM Results
+WHERE FactorialUID IS (
+SELECT FactorialUID FROM Ids
+WHERE Genotype IS 'Cultivar25'
+)
+""" 
+with sqlite3.connect(db_directory+db_name) as conn:
+    df = pd.read_sql(sql=sql_query, con = conn)
+df['sqlite'] = db_name
+df.Date = df.Date.astype(int)
+```
+
+```{python}
+# Without correcting for within season
+import plotly.express as px
+px.line(df.merge(unix_date_lookup.rename(columns={'unix_day':'Date'})),
+        x = 'doy', y = 'yield_Kgha', color = 'year')
+```
+
+```{python}
+# forcing values to reset
+temp = df.merge(add_planted_to_date_lookup(unix_date_lookup, SowDate = "20-Feb"
+                                          ).rename(columns={'unix_day':'Date'}))
+temp.loc[(temp.planted == 0), 'yield_Kgha'] = 0
+px.line(temp,
+        x = 'doy', y = 'yield_Kgha', color = 'year')
+```
+
+### Write out cultivar/genotype matrix 
+
+```{python}
+genotypes = genotypes.loc[
+    # only new simulated genotypes (no default values)
+    [True if re.match('Cultivar\d+', e) else False for e in genotypes.Genotype], 
+    # Put these columns at the left
+    ['sqlite', 'Genotype']+[e for e in genotypes if e not in ['sqlite', 'Genotype']]
+    ].reset_index(drop = True)
+genotypes = genotypes.reset_index().rename(columns = {'index':'Cult_Idx'})
+genotypes.head()
+```
+
+```{python}
+cult_np = genotypes.drop(columns = [
+    'Cult_Idx', 'sqlite', 'Genotype',
+    'Phenology.Photosensitive.Target.XYPairs.X__1',
+    'Phenology.Photosensitive.Target.XYPairs.X__2',
+    'Phenology.Photosensitive.Target.XYPairs.X__3',
+    'Phenology.Photosensitive.Target.XYPairs.Y__1',
+    'Phenology.Photosensitive.Target.XYPairs.Y__2'])
+cult_np_names = list(cult_np)
+cult_np = np.array(cult_np.copy())
+```
+
+```{python}
+np.save(cache_path+'SimCultNames.np', np.array(cult_np_names))
+np.save(cache_path+'SimCult.np', cult_np)
+```
+
+### Demonstrate workflow for one database
+
+```{python}
+# metadata for the results
+met_idxs = pd.DataFrame(met_np_lonlatyear, columns=['Longitude', 'Latitude', 'year'])
+met_idxs.year = met_idxs.year.astype(int)
+met_idxs = met_idxs.reset_index().rename(columns = {'index':'Met_Idx'})
+met_idxs.head()
+```
+
+```{python}
+# metadata for the results
+soils_idxs = pd.DataFrame(soils_np_i_lonlati, columns=['Longitude', 'Latitude', 'SoilIdx']).reset_index().rename(columns = {'index':'Soils_Idx'})
+soils_idxs
+```
+
+## Stitch results into database
+
+```{python}
+# [('DefaultCultivarsAll',), ('Genotypes',), ('Ids',), ('Results',)]
+
+# getting only the maximum values
+def get_term_yield_from_db(db_directory, db_name):
+    Ids = get_full_table(db_directory, db_name = db_name, table='Ids')
+    # NOTE constraining Maize.AboveGround.Wt makes sure that we don't have any odd behavior if a crop isn't harvested before the new year.
+    sql_query = """
+    SELECT 
+        Date,
+        `Maize.AboveGround.Wt`, `Maize.LAI`, 
+        MAX(yield_Kgha) as yield_Kgha, 
+        FactorialUID
+    FROM Results
+    WHERE `Maize.AboveGround.Wt` > 0
+    GROUP BY FactorialUID
+    """
+    with sqlite3.connect(db_directory+db_name) as conn:
+        i_results = pd.read_sql(sql=sql_query, con = conn)
+    i_results
+
+    i_results = i_results.merge(Ids, on='FactorialUID').drop(columns = ['sqlite'])
+    i_results.Date = i_results.Date.astype(int)
+
+    # add in time data
+    temp = pd.concat([
+        add_planted_to_date_lookup(unix_date_lookup, SowDate = e).assign(SowDate = e) 
+        for e in list(set(Ids.SowDate))])
+    # temp
+
+    # have to add in year
+    i_results = i_results.merge(
+        temp.loc[:, ['unix_day', 'year', 'doy']
+                ].rename(columns = {'unix_day':'Date', 'doy':'harvest_doy'}), 
+        how = 'left').drop_duplicates()
+
+
+
+    temp_planting = temp.loc[temp.planted == 1, :
+                       ].groupby(['year', 'SowDate']
+                       ).agg(unix_day = ('unix_day', np.min)
+                       ).reset_index()
+    temp_planting = pd.merge(temp_planting, temp, how = 'left')
+    temp_planting = temp_planting.loc[:, ['year', 'SowDate', 'doy']].rename(columns={'doy':'planting_doy'})
+    # temp_planting
+
+    i_results = i_results.merge(temp_planting)
+
+    Ids = Ids.merge(i_results.loc[:, [
+        'FactorialUID','Longitude','Latitude','SoilIdx','Genotype','year','planting_doy','harvest_doy'
+    ]]).copy()
+
+
+    i_results = i_results.loc[:, [
+        'Maize.AboveGround.Wt', 'Maize.LAI', 'yield_Kgha', 'FactorialUID', ]].copy()
+    
+    i_results = i_results.merge(Ids)
+    i_results.sort_values('FactorialUID').reset_index(drop = True)
+
+    i_results = i_results.loc[:, [
+        'Maize.AboveGround.Wt', 'Maize.LAI', 'yield_Kgha',
+        'sqlite', 'FactorialUID', 'Genotype', 
+        'Longitude', 'Latitude', 'SoilIdx',
+       #'SowDate',
+        'year', 'planting_doy', 'harvest_doy']].copy()
+    
+    return(i_results)
+
+# res = get_term_yield_from_db(db_directory, db_name = 'sim_cultivar.sqlite')
+# res
+```
+
+```{python}
+i_sqlites = [e for e in list(sim_cultivars.name)]
+# i_sqlites.reverse()
+```
+
+```{python}
+run_sqlites = [] # just in case there's an error I want to track the entries that I have already run 
+```
+
+```{python}
+run_sqlites[-1]
+# 'sim_1697813117_80426.sqlite' this one failed with error 
+# DatabaseError: Execution failed on sql 'SELECT * FROM Ids': no such table: Ids
+```
+
+```{python}
+import sqlalchemy
+if False: # this takes a long time to run so must do it manually.
+
+    for i_sqlite in tqdm(i_sqlites):
+        # and also remove them from the to be run list.
+        i_sqlites = [e for e in i_sqlites if e != i_sqlite]
+        run_sqlites.append(i_sqlite)
+
+
+        res = get_term_yield_from_db(db_directory, db_name = i_sqlite) 
+        # add in linking indexes
+        res = res.merge(soils_idxs.loc[:, ['Soils_Idx', 'SoilIdx']], how = 'left'
+                 ).merge(met_idxs, how = 'left'
+                 ).merge(genotypes.loc[:, ['Cult_Idx', 'sqlite', 'Genotype']], how = 'left'   
+                 ).drop(columns = ['SoilIdx',
+                                  'sqlite', 'FactorialUID', 'Genotype', 'Longitude', 'Latitude'
+                                  ])
+        res = res.dropna().reset_index(drop = True)
+
+        if not os.path.exists(cache_path+'res.db'):
+            # initialize
+            engine=sqlalchemy.create_engine(f'sqlite:///'+cache_path+'res.db')
+            res.to_sql(name = 'Results',con= engine, index=False, if_exists='replace') 
+            engine.dispose()
+        else:
+            # extend
+            engine=sqlalchemy.create_engine(f'sqlite:///'+cache_path+'res.db')
+            res.to_sql(name = 'Results',con= engine, index=False, if_exists='append') 
+            engine.dispose()    
+
+        # check end size
+    #     engine=sqlalchemy.create_engine(f'sqlite:///'+cache_path+'res.db')
+    #     print(pd.read_sql('select * from Results', engine).shape)
+    #     engine.dispose()
+```
+
+```{python}
+# os.unlink(cache_path+'res.db')
+```
+
+```{python}
+# res_lookup = res.loc[:, ['Soils_Idx', 'Met_Idx', 'Cult_Idx']]
+# res_plantharvest = res.loc[:, ['planting_doy', 'harvest_doy']]
+# res_year = res.loc[:, ['year']]
+# res_ys = res.loc[:, ['Maize.AboveGround.Wt', 'Maize.LAI', 'yield_Kgha']]
+```
+
+## Work with data
+
+
