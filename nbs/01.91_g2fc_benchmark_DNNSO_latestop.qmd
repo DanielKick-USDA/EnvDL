@@ -760,7 +760,7 @@ if not os.path.exists(cache_path+'/model.pt'):
         learning_rate = 1e-3,
         batch_size = dataloader_batch_size,
         epochs = (run_epochs - epochs_run),
-        save_pt = False
+        save_pt = True
     )
     
     # experimental outputs:

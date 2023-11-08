@@ -470,7 +470,7 @@ training_dataloader = DataLoader(
         idx_lookup_geno = obs_geno_lookup,
         idx_lookup_env = obs_env_lookup,
         device = 'cuda'),
-    batch_size = 1000,
+    batch_size = 256,
     shuffle = True
 )
 # next(iter(training_dataloader))
@@ -490,7 +490,7 @@ testing_dataloader = DataLoader(
         idx_lookup_geno = obs_geno_lookup,
         idx_lookup_env = obs_env_lookup,
         device = 'cuda'),
-    batch_size = 1000,
+    batch_size = 256,
     shuffle = True
 )
 # next(iter(testing_dataloader))
@@ -781,8 +781,8 @@ def yhat_loop_yx(dataloader, model):
 ```
 
 ```{python}
-# dataloader_batch_size = 50
-# run_epochs = 100
+dataloader_batch_size = 256
+run_epochs = 10
 
 # don't run if either of these exist because there may be cases where we want the results but not the model
 import re
@@ -845,7 +845,7 @@ if not os.path.exists(cache_path+'/model.pt'):
 
 
 ```{python}
-estimate_iterations(sec_per_it = 84)
+# estimate_iterations(sec_per_it = 84)
 ```
 
 ```{python}
