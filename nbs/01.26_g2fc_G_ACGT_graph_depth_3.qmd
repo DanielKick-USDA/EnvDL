@@ -60,7 +60,7 @@ print(f"Using {device} device")
 ```
 
 ```{python}
-cache_path = '../nbs_artifacts/01.25_g2fc_G_ACGT_graph/'
+cache_path = '../nbs_artifacts/01.26_g2fc_G_ACGT_graph_depth_3/'
 ensure_dir_path_exists(dir_path = cache_path)
 ```
 
@@ -69,12 +69,12 @@ ensure_dir_path_exists(dir_path = cache_path)
 ## For graph linear blocks
 default_output_size = 50
 default_dropout_pr = 0.1
-default_block_reps = 1
+default_block_reps = 3
 
 ## Training settings
 run_epochs = 15
 epochs_run = 0
-dataloader_batch_size = 1000
+dataloader_batch_size = 500
 ```
 
 ## Functions
