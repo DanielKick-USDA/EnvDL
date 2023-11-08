@@ -1,0 +1,3311 @@
+---
+title: Tracer Bullet
+jupyter: python3
+---
+
+
+> 
+
+
+```{python}
+# Hacky way to schedule. Here I'm setting these to sleep until the gpus should be free.
+# At the end of the notebooks  os._exit(00) will kill the kernel freeing the gpu. 
+#                          Hours to wait
+# import time; time.sleep( 6 * (60*60))
+```
+
+```{python}
+#FIXME
+# REMOVE reduction on train/validate idxs 
+
+import os, re, json
+from tqdm import tqdm
+
+import numpy as np
+import pandas as pd
+# pd.set_option('display.max_columns', None)
+
+import plotly.express as px
+import plotly.io as pio
+pio.templates.default = "plotly_white"
+
+import torch
+from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
+from torch import nn
+
+import torch.nn.functional as F # used in VAE
+
+from EnvDL.core import * 
+# includes 
+    # remove_matching_files 
+    # read_json
+from EnvDL.dna import *
+from EnvDL.dlfn import * 
+# includes
+    # read_split_info 
+    # find_idxs_split_dict
+    # train_loop_yx
+    # train_error_yx
+    # test_loop_yx
+    # train_nn_yx
+    # yhat_loop_yx
+
+from tqdm import tqdm
+```
+
+```{python}
+use_gpu_num = 0
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+if use_gpu_num in [0, 1]: 
+    torch.cuda.set_device(use_gpu_num)
+print(f"Using {device} device")
+```
+
+```{python}
+# Imports for the Adaptive Experimentation (Ax) platform
+from ax.service.ax_client import AxClient, ObjectiveProperties
+from ax.utils.measurement.synthetic_functions import hartmann6
+from ax.utils.notebook.plotting import render, init_notebook_plotting
+
+import pickle as pkl
+# Because the search space is nested, it's not storable with the builtin methods for saving/reading json (not tested with sql)
+# pickling seems to work just fine.
+
+init_notebook_plotting()
+```
+
+```{python}
+cache_path = '../nbs_artifacts/99.99_g2fc_Tracer_Bullet/'
+ensure_dir_path_exists(dir_path = cache_path)
+```
+
+## Load data
+
+### Genomic data
+
+```{python}
+load_from = '../nbs_artifacts/01.05_g2fc_demo_model/'
+parsed_kegg_gene_entries = get_cached_result(load_from+'filtered_kegg_gene_entries.pkl')
+ACGT_gene_slice_list = get_cached_result(load_from+'ACGT_gene_slice_list.pkl')
+```
+
+```{python}
+load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
+ACGT = np.load(load_from+'ACGT.npy')
+ACGT_hilb = np.load(load_from+'ACGT_hilb.npy')
+```
+
+```{python}
+# Optional -- Since I used percents, ACGT can be represented as ACG without loss of information
+ACGT = ACGT[:, 0:3, :]
+ACGT_hilb = ACGT_hilb[:, 0:3, :, :]
+ACGT_gene_slice_list = [e[:, 0:3, :] for e in ACGT_gene_slice_list]
+```
+
+
+### Soil and Management ("Static" in season)
+
+```{python}
+# #                            mgmtMatNames.npy
+# mgmtMat = np.load(load_from+'mgmtMat.npy')
+SMat = np.load(load_from+'SMat.npy')
+```
+
+### Weather (Variable in season)
+
+```{python}
+np.load(load_from+'PlantHarvestNames.npy')
+PlantHarvest = np.load(load_from+'PlantHarvest.npy')
+
+WMat = np.load(load_from+'WMat.npy')
+WMatNames = np.load(load_from+'WMatNames.npy')
+
+WMat_hilb = np.load(load_from+'WMat_hilb.npy')
+```
+
+### Response and lookup
+
+```{python}
+load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
+phno_geno = pd.read_csv(load_from+'phno_geno.csv')
+phno = phno_geno
+
+obs_geno_lookup = np.load(load_from+'obs_geno_lookup.npy') # Phno_Idx  Geno_Idx  Is_Phno_Idx
+obs_env_lookup = np.load(load_from+'obs_env_lookup.npy')   # Phno_Idx  Env_Idx   Is_Phno_Idx
+YMat = np.load(load_from+'YMat.npy')
+```
+
+## Demo retrieval
+
+```{python}
+# Indexes
+idx = 0
+
+geno_idx = obs_geno_lookup[idx, 1]
+env_idx = obs_env_lookup[idx, 1]
+```
+
+```{python}
+# Response
+YMat[idx]
+```
+
+```{python}
+# Weather (plant in ground) ------------------------------------------------------------------------
+# generate planting information
+## Basic tensor
+WPlant = np.zeros(365)
+WPlant[PlantHarvest[idx, 0]:PlantHarvest[idx, 1]] = 1
+
+## Hilbert
+WPlant_hilb = np_3d_to_hilbert(WPlant[None, :, None])
+WPlant_hilb = WPlant_hilb.squeeze(axis = 3)
+WPlant_hilb[np.isnan(WPlant_hilb)] = 0
+# px.imshow(WPlant_hilb.squeeze())
+# compare with
+# px.imshow(WMat_hilb[env_idx][8, :, :])
+```
+
+```{python}
+# Weather (all) ------------------------------------------------------------------------------------
+## Basic tensor
+np.concatenate([WMat[env_idx], WPlant[None, :]], axis = 0).shape
+## Hilbert
+np.concatenate([WMat_hilb[env_idx], WPlant_hilb], axis = 0).shape
+```
+
+
+```{python}
+# Soil
+SMat[env_idx]
+```
+
+```{python}
+# Genome -------------------------------------------------------------------------------------------
+ACGT[geno_idx].shape
+
+ACGT_hilb[geno_idx].shape
+```
+
+```{python}
+# if separate tensors are needed
+[e[geno_idx] for e in ACGT_gene_slice_list ][0:2]
+```
+
+```{python}
+# if one tensor is needed
+np.concatenate([e[geno_idx] for e in ACGT_gene_slice_list ], axis = 1)
+```
+
+
+### Set up Dataset
+
+```{python}
+# This dataset is designed to be the go to Dataset for this project. 
+# It has enough flexibility to take all or a subset of the variables.
+
+class BigDataset(Dataset):
+    def __init__(
+        self,
+#         lookup_obs
+#         lookup_geno,
+#         lookup_env,
+#         y,
+#         G, 
+#         G_type
+#         S,
+#         P,
+#         W,
+#         W_type,
+        transform = None, 
+        target_transform = None,
+        **kwargs 
+        ):
+        # Lookup info (so that deduplication works)
+        if 'lookup_obs'  in kwargs: self.lookup_obs = kwargs['lookup_obs'];
+        if 'lookup_geno' in kwargs: self.lookup_geno = kwargs['lookup_geno'];
+        if 'lookup_env'  in kwargs: self.lookup_env  = kwargs['lookup_env'];
+        # Data
+        if 'y' in kwargs: self.y = kwargs['y'];
+        if 'G' in kwargs: self.G = kwargs['G'];
+        if 'S' in kwargs: self.S = kwargs['S'];
+        if 'P' in kwargs: self.P = kwargs['P']; # PlantHarvest so that planting can be added into W
+        if 'W' in kwargs: self.W = kwargs['W'];
+        # Data prep state information
+        if 'G_type' in kwargs: self.G_type = kwargs['G_type']; # raw, hilbert, list
+        if 'W_type' in kwargs: self.W_type = kwargs['W_type']; # raw, hilbert
+        # Data to be returned
+        self.out_names = [e for e in ['y', 'G', 'S', 'W'] if e in kwargs]
+        # Transformations
+        self.transform = transform
+        self.target_transform = target_transform
+        
+    def __len__(self):
+        return len(self.lookup_obs)
+    
+    def __getitem__(self, idx):
+        out = []
+        obs_idx = self.lookup_obs[idx]
+        if 'y' in self.out_names:
+            y_idx = self.y[idx]
+            if self.transform:
+                y_idx = self.transform(y_idx)
+            out += [y_idx]
+        if 'G' in self.out_names:
+            geno_idx = self.lookup_geno[idx, 1]
+            if self.G_type in ['raw', 'hilbert']:
+                G_idx = self.G[geno_idx]
+            if 'list' == self.G_type:
+                G_idx = [e[geno_idx] for e in self.G]
+            if self.transform:
+                G_idx = self.transform(G_idx)
+            out += [G_idx]
+        if 'S' in self.out_names:
+            env_idx = self.lookup_env[idx, 1]
+            S_idx = self.S[env_idx]
+            if self.transform:
+                S_idx = self.transform(S_idx)
+            out += [S_idx]
+        if 'W' in self.out_names:
+            env_idx = self.lookup_env[idx, 1]
+            # get growing information
+            WPlant = np.zeros(365)
+            WPlant[self.P[obs_idx, 0]:self.P[obs_idx, 1]] = 1
+            if self.W_type == 'raw':
+                WPlant = torch.from_numpy(WPlant)
+                W_idx = torch.concatenate([self.W[env_idx], WPlant[None, :]], axis = 0)
+            if self.W_type == 'hilbert':
+                # convert growing info to hilbert curve
+                WPlant_hilb = np_3d_to_hilbert(WPlant[None, :, None], silent = True)
+                WPlant_hilb = WPlant_hilb.squeeze(axis = 3)
+                WPlant_hilb[np.isnan(WPlant_hilb)] = 0
+                WPlant_hilb = torch.from_numpy(WPlant_hilb)
+                W_idx = torch.concatenate([self.W[env_idx], WPlant_hilb], axis = 0)
+            if self.transform:
+                W_idx = self.transform(W_idx)
+            out += [W_idx]
+        return out
+
+# demo = BigDataset(
+#     lookup_obs = [i for i in range(len(YMat))], # Training/testing. To use a deduplicated dataset, 
+#                                                 # Pass the training index through the desired lookup
+#                                                 # list(set(obs_env_lookup[:, 2])) -> phno idxs for each env (1 for each)
+#     y = YMat,
+#     lookup_geno = obs_geno_lookup,
+#     G = ACGT,
+#     G_type = 'raw',
+#     lookup_env = obs_env_lookup,
+#     S = SMat,
+#     P = PlantHarvest,
+#     W = WMat,
+#     W_type = 'raw',
+#           )   
+```
+
+
+```{python}
+# training_dataloader = DataLoader(
+#     BigDataset(
+#     lookup_obs = [i for i in range(len(YMat))], # Training/testing. To use a deduplicated dataset, 
+#                                                 # Pass the training index through the desired lookup
+#                                                 # list(set(obs_env_lookup[:, 2])) -> phno idxs for each env (1 for each)
+#     y = YMat,
+#     lookup_geno = obs_geno_lookup,
+#     G = torch.from_numpy(ACGT),
+#     G_type = 'raw',
+#     lookup_env = obs_env_lookup,
+#     S = torch.from_numpy(SMat),
+#     P = torch.from_numpy(PlantHarvest),
+#     W = torch.from_numpy(WMat),
+#     W_type = 'raw',
+#           )   ,
+#     batch_size = 50,
+#     shuffle = True
+# )
+
+# [e.shape for e in next(iter(training_dataloader))]
+```
+
+
+```{python}
+# training_dataloader = DataLoader(
+#     BigDataset(
+#     lookup_obs = [i for i in range(len(YMat))], # Training/testing. To use a deduplicated dataset, 
+#                                                 # Pass the training index through the desired lookup
+#                                                 # list(set(obs_env_lookup[:, 2])) -> phno idxs for each env (1 for each)
+#     y = YMat,
+#     lookup_geno = obs_geno_lookup,
+# #     G = torch.from_numpy(ACGT),
+# #     G_type = 'raw',
+        
+# #     G = torch.from_numpy(ACGT_hilb),
+# #     G_type = 'hilbert',        
+        
+#     G = [torch.from_numpy(e) for e in ACGT_gene_slice_list] ,
+#     G_type = 'list',        
+        
+#     lookup_env = obs_env_lookup,
+#     S = torch.from_numpy(SMat),
+        
+#     P = torch.from_numpy(PlantHarvest),
+
+# #     W = torch.from_numpy(WMat),
+# #     W_type = 'raw', 
+        
+# #     W = torch.from_numpy(WMat_hilb),
+# #     W_type = 'hilbert', 
+#           )   ,
+#     batch_size = 50,
+#     shuffle = True
+# )
+
+# [e for e in next(iter(training_dataloader))]
+```
+
+## Setup Autoencoder Networks
+
+### Reference Weather Info
+based on 01.30_g2fc_W_only
+
+```{python}
+# Process Grid of Collected POWER data (with imputation for missings). 
+# After inductive tinkering this is the best lightgbm 
+# Depth     |   32 | 
+# num_leaves|16384 | 
+# num_round |  200 | 
+# rmse      | .117 |
+# run time  | 4m33 |
+
+load_path = '../nbs_artifacts/01.04_g2fc_gps_grid_nasa_power/power_data/'
+
+if os.path.exists(cache_path+'HistWthr.npy'):
+    usa_grid = np.load(cache_path+'HistWthr.npy', allow_pickle=True)
+    usa_grid_names = np.load(cache_path+'HistWthrNames.npy')
+else:
+    cached_files = [e for e in os.listdir(load_path) if re.match('.+\.pkl', e)]
+    usa_grid = pd.concat([get_cached_result(load_path+e) for e in cached_files])
+    
+    temp = usa_grid.loc[:, ['Date']]
+    temp = temp.drop_duplicates()
+    # sub-optimal way to do this but working on the column is not behaving as expected
+    temp.loc[:, 'DOY'] = [pd.Period(e).day_of_year for e in list(temp['Date'])]
+    temp['Year'] = temp.Date.str[0:4] 
+
+    usa_grid = usa_grid.merge(temp.reset_index(drop = True))
+
+    # fix missing values (coded as -999 by NASA)
+
+    # trim to 365 days
+    mask = (usa_grid.DOY <= 365)
+    usa_grid = usa_grid.loc[mask, ].copy()
+
+    ## Impute missing values ---------------------------------------------------------------------------
+    M = usa_grid.copy()
+    # overwrite -999s with na
+    cols_with_missing = [
+        'GWETTOP',
+        'ALLSKY_SFC_SW_DWN',
+        'ALLSKY_SFC_PAR_TOT',
+        'GWETROOT',
+        'GWETPROF',
+        'ALLSKY_SFC_SW_DNI']
+
+    for e in cols_with_missing:
+        mask = (M[e] == -999)
+        M.loc[mask, [e]] = np.nan
+        
+    imputation_order = [
+        'ALLSKY_SFC_SW_DNI',
+        'GWETTOP',
+        'ALLSKY_SFC_SW_DWN',
+        'ALLSKY_SFC_PAR_TOT',
+        'GWETROOT',
+        'GWETPROF']
+
+    import lightgbm as lgb
+
+    temp = M.copy()
+    temp = temp.drop(columns = ['Date', 'Year'])#.dropna()
+    temp_names = list(temp)
+
+    csd = {}
+    for e in temp_names:
+        csd[e]= [np.nanmean(temp[e]), np.nanstd(temp[e])]
+
+    for e in temp_names:
+        temp[e] = ((temp[e] - csd[e][0])/ csd[e][1])
+
+    res_dict = {}
+
+    for impute in tqdm(imputation_order):
+        # only look at the columns that are complete
+        y = np.array(temp[impute])
+        x = np.array(temp.drop(columns=imputation_order))
+
+        train_data = lgb.Dataset(
+            np.array(x),
+            label=np.array(y)
+        )
+
+        param = {
+            'max_depth': 32,
+            'num_leaves': 16384, # should be less than or equal to 2^max_depth
+            'objective': 'mse'}
+        param['metric'] = 'mse'
+        num_round = 200
+        bst = lgb.train(
+            param, 
+            train_data, num_round, 
+            valid_sets=[train_data]
+            )
+
+        ypred = bst.predict(np.array(x))
+        mask = ~np.isnan(y)
+        y[~mask] = ypred[~mask]
+        res_dict[impute] = y
+
+    for imputation in imputation_order:
+        M.loc[:, imputation] = (res_dict[imputation]*csd[imputation][1])+csd[imputation][0]
+
+    M = M.drop(columns=['Date'])
+
+    np.save(cache_path+'HistWthrNames.npy', list(M))
+    np.save(cache_path+'HistWthr.npy',  np.array(M))
+```
+
+```{python}
+# usa_grid_names
+usa_grid = usa_grid.astype(np.float32)
+```
+
+#### Add in hypothetical planting/harvesting dates & reformat
+
+```{python}
+# Finding values for sampling function
+if False:
+    px.scatter(
+        pd.DataFrame(PlantHarvest, columns = ['Plant', 'Harvest']).drop_duplicates(), 
+        x = 'Plant', y = 'Harvest')
+
+    from sklearn.linear_model import LinearRegression
+
+    X, y = PlantHarvest[:, 0][:, None], PlantHarvest[:, 1]
+    fm = LinearRegression().fit(X, y)
+    sigma = (fm.predict(X) - y).std()
+    fm.intercept_, fm.coef_, sigma
+
+    # sigma is not fixed, but that's okay. I'll just end up over sampling less plausable combinations
+    px.scatter(x = PlantHarvest[:, 0], 
+              y = (fm.predict(X) - y))
+    
+# Propose plausable plant harvest
+def propose_plantharvest(
+    first_doy = 60,
+    last_doy = 170,
+    range_pr = 1.1,
+    rng = np.random.default_rng()):
+    range_doy = range_pr*(last_doy - first_doy)
+    # update with the expanded range
+    first_doy = round(((last_doy + first_doy)/2)-(range_doy/2))
+    last_doy  = round(((last_doy + first_doy)/2)+(range_doy/2))
+    first_doy = first_doy if first_doy >=   0 else   0
+    last_doy  = last_doy  if last_doy  <= 365 else 365
+
+    def check_sim(X, y_hat):
+        res = (
+            (X >= 0)&
+            (X <= 365)&
+            (y_hat >= 0)&
+            (y_hat <= 365)&
+            ((y_hat - X) > 0)&
+            ((y_hat - X) <= 365))
+        return res
+
+    def sim_harvest(first_doy, last_doy):
+        # coefs from lm fit on plant/harvest date
+        X = rng.integers(last_doy-first_doy)+first_doy
+        y_hat = 1.19149787*(X) + 136.23721389467627
+        y_hat = y_hat + 16.664816855810002*rng.standard_normal(1)
+        y_hat = round(y_hat[0])
+        return X, y_hat
+
+    X, y_hat = 0, 0
+    while not check_sim(X= X, y_hat= y_hat):
+        X, y_hat = sim_harvest(first_doy, last_doy)
+
+    return(X, y_hat)
+```
+
+```{python}
+# ith_plantharvest = propose_plantharvest(
+#     first_doy = 60,
+#     last_doy = 170,
+#     range_pr = 1.1,
+#     rng = np.random.default_rng())
+# ith_plantharvest = list(ith_plantharvest)
+# ith_plantharvest
+```
+
+```{python}
+def format_usa_grid_obs(
+    usa_grid = usa_grid, 
+    ith_lat  = 43.8968753814697, 
+    ith_lon  = -106.692895889282, 
+    ith_year = 1981,
+    ith_plantharvest = [169, 327],
+    **kwargs # W_type = 'hilbert'
+):
+    if 'W_type' in list(kwargs.keys()):
+        W_type = kwargs['W_type']
+    else:
+        W_type = 'raw'  
+    # get observation
+    mask = ((usa_grid[:, 0] == ith_lat) &
+            (usa_grid[:, 1] == ith_lon) &
+            (usa_grid[:, 19] == ith_year))
+    WTemp = usa_grid[mask, 2:18]
+
+    # switch to match WMat's shape
+    WTemp = WTemp.swapaxes(0,1)
+    WTemp = WTemp[None, :, :]
+
+    # spike in a simulated planting and harvesting time
+    ## Basic tensor
+    WPlant = np.zeros(365)
+    WPlant[ith_plantharvest[0]:ith_plantharvest[1]] = 1
+    WTemp = np.concatenate([WTemp, WPlant[None, None, :]], axis = 1)
+
+    ## Hilbert
+    if W_type == 'hilbert':
+        WTemp = np_3d_to_hilbert(np.swapaxes(WTemp, 1, 2))
+        WTemp = WTemp.swapaxes(1, 3)
+        WTemp = WTemp.swapaxes(2, 3)
+        WTemp[np.isnan(WTemp)] = 0
+
+    return(WTemp)
+```
+
+
+```{python}
+format_usa_grid_obs(
+    usa_grid = usa_grid, 
+    ith_lat = 43.8968753814697, 
+    ith_lon = -106.692895889282, 
+    ith_year = 1981,
+    ith_plantharvest = [169, 327],
+    # kwargs
+    W_type = 'raw'
+).shape
+
+# format_usa_grid_obs(
+#     usa_grid = usa_grid, 
+#     ith_lat = 43.8968753814697, 
+#     ith_lon = -106.692895889282, 
+#     ith_year = 1981,
+#     ith_plantharvest = [169, 327],
+#     # kwargs
+#     W_type = 'hilbert'
+# ).shape
+```
+
+```{python}
+def propose_usa_grid_obs(
+    idx, # = 0,
+    obs_lookup, # = train_obs_uids,
+    ith_plantharvest, # = list(propose_plantharvest(first_doy = 60, last_doy = 170, range_pr = 1.1,
+                      #                             rng = np.random.default_rng())),
+    W_type #= 'raw'
+):
+    mask = (obs_lookup.index == idx)
+    ith_lat  = float(train_obs_uids.loc[mask, 'Latitude'])
+    ith_lon  = float(train_obs_uids.loc[mask, 'Longitude'])
+    ith_year = float(train_obs_uids.loc[mask, 'Year'])
+
+    out = format_usa_grid_obs(
+        usa_grid = usa_grid, 
+        ith_lat = ith_lat, 
+        ith_lon = ith_lon, 
+        ith_year = ith_year,
+        ith_plantharvest = ith_plantharvest,
+        # kwargs
+        W_type = W_type
+    )    
+    return(out)
+```
+
+
+```{python}
+# propose_usa_grid_obs(
+#     idx = 0,
+#     obs_lookup = train_obs_uids,
+#     ith_plantharvest = list(propose_plantharvest(first_doy = 60, last_doy = 170, range_pr = 1.1,
+#                                                  rng = np.random.default_rng())),
+#     W_type = 'raw'
+# )
+```
+
+#### Demo 
+
+I'd like the data from 2013 on separate since that's when I have observations data from.
+
+```{python}
+uniq_obs = pd.DataFrame(
+    np.concatenate([
+        usa_grid[:, 0:2], 
+        usa_grid[:, 19][:, None]
+    ], axis = 1), 
+    columns=['Latitude', 'Longitude', 'Year'])
+
+uniq_obs = uniq_obs.drop_duplicates()
+
+mask = (uniq_obs.Year < 2013)
+train_obs_uids = uniq_obs.loc[mask, ].reset_index(drop = True)
+train_obs_uids.head()
+```
+
+
+```{python}
+test_obs_uids = uniq_obs.loc[~mask, ].reset_index(drop = True)
+test_obs_uids.head()
+```
+
+```{python}
+# let's start with hypothetical data containing different locations in the usa
+mask = ((train_obs_uids.Latitude  == train_obs_uids.Latitude.min()) | 
+        (train_obs_uids.Longitude == train_obs_uids.Longitude.max()))
+        
+
+hypothetical_data = np.concatenate([
+    propose_usa_grid_obs(
+        idx = i,
+        obs_lookup = train_obs_uids,
+        ith_plantharvest = list(propose_plantharvest(first_doy = 60, last_doy = 170, range_pr = 1.1,
+                                                     rng = np.random.default_rng())),
+        W_type = 'raw') for i in 
+    tqdm(train_obs_uids.loc[mask, ].index) 
+], axis = 0)
+
+hypothetical_data_labels = train_obs_uids.loc[mask, ].reset_index(drop = True).copy()
+```
+
+```{python}
+x_std  = hypothetical_data.std(axis = 0)
+x_std[x_std == 0] = 1 # overwrite std 0s with 1
+x_mean = hypothetical_data.mean(axis = 0)
+```
+
+```{python}
+hypothetical_data = ((hypothetical_data - x_mean) /x_std)
+```
+
+```{python}
+class WthrEncode(Dataset):
+    def __init__(self, y):
+        self.y = y
+    def __len__(self):
+        return(len(self.y))
+    def __getitem__(self, idx):
+        return self.y[idx]
+```
+
+```{python}
+training_dataloader = DataLoader(
+    WthrEncode(y = torch.from_numpy(hypothetical_data).to(device).to(torch.float)),
+    batch_size = 50,
+    shuffle = True
+)
+```
+
+```{python}
+# next(iter(training_dataloader)).shape
+```
+
+```{python}
+# another try to get around kl loss becoming nan
+# using models in https://github.com/AntixK/PyTorch-VAE as reference
+class BaseVAE(nn.Module):
+    def __init__(self,
+                 in_vals = 17*365, 
+                 hidden_units = 1024,
+                 latent_dims = 17*365, 
+                ):
+        super(BaseVAE, self).__init__()
+        
+        self.encoder = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(in_vals,  hidden_units), nn.ReLU(),
+            nn.Linear(hidden_units,  hidden_units), nn.ReLU(),
+            nn.Linear(hidden_units,  hidden_units), nn.ReLU(),
+            nn.Linear(hidden_units,  hidden_units), nn.ReLU(),
+        )
+        
+        self.fc_mu  = nn.Linear(hidden_units, latent_dims)
+        self.fc_var = nn.Linear(hidden_units, latent_dims)
+        
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_dims, hidden_units), nn.ReLU(),
+            nn.Linear(hidden_units,  hidden_units), nn.ReLU(),
+            nn.Linear(hidden_units,  hidden_units), nn.ReLU(),
+            nn.Linear(hidden_units,  hidden_units), nn.ReLU(),
+            nn.Linear(hidden_units, in_vals))
+        
+    def encode(self, x):
+        res = self.encoder(x)
+        mu = self.fc_mu(res)
+        log_var = self.fc_var(res)
+        return [mu, log_var]
+
+    def decode(self, z):
+        out = self.decoder(z) # this is more complex if it's a cnn. The example uses an adapter layer
+        return(out)
+
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        return eps * std + mu
+
+    def forward(self, x, **kwargs):
+        mu, log_var = self.encode(x)
+        z = self.reparameterize(mu, log_var)
+        return [self.decode(z).reshape((-1, 17, 365)), x, mu, log_var]
+
+    def loss_function(self, *args, **kwargs):
+        recons = args[0]
+        x = args[1]
+        mu = args[2]
+        log_var = args[3]
+
+        kld_weight = kwargs['M_N'] # Account for the minibatch samples from the dataset
+
+        recons_loss =F.mse_loss(recons, x)
+        kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
+
+        loss = recons_loss + kld_weight * kld_loss
+#         print(loss, recons_loss.detach(), -kld_loss.detach())
+    #         return {'loss': loss, 'Reconstruction_Loss':recons_loss.detach(), 'KLD':-kld_loss.detach()}
+        return loss
+    
+#         def sample(self, num_samples, current_device, **kwargs):
+#             z = torch.randn(num_samples, self.latent_dim)
+#             z = z.to(current_device)
+#             samples = self.decode(z)
+#             return samples
+        
+#         def generate(self, x):
+#             return self.forward(x)[0]      
+```
+
+```{python}
+def train_vae(
+    vae,
+    data,
+    epochs=20,
+    verbose = False
+):    
+    opt = torch.optim.AdamW(vae.parameters())
+    for epoch in tqdm(range(epochs)):
+        for x in data:
+            opt.zero_grad()
+            x_hat = vae(x)
+            inverse_batches = 1/len(training_dataloader)
+            loss = vae.loss_function(*x_hat, M_N = inverse_batches)
+            loss.backward()
+            opt.step()
+            if torch.isinf(loss):
+                print('Loss is inf')
+                break
+            if torch.isnan(loss):
+                print('Loss is nan')
+                break
+        if verbose:
+            print(f'loss {loss}')
+        if torch.isinf(loss) or torch.isnan(loss):
+            break
+```
+
+```{python}
+#TODO this would be a good place to cache a model since training is so initialization dependent
+
+# it's possible to get this to train on as few as 2 latent dims but that doesn't seem necessary
+vae = BaseVAE(in_vals = 17*365, 
+              hidden_units = 1024,
+              latent_dims = 1024
+             ).to(device)
+
+# vae(next(iter(training_dataloader)))[0]
+
+train_vae(
+    vae = vae,
+    data = training_dataloader,
+    epochs=50000,
+    verbose = False
+)
+```
+
+```{python}
+Xin = next(iter(training_dataloader))
+vae
+```
+
+```{python}
+mu, log_var = vae.encode(Xin)
+z = vae.reparameterize(mu, log_var)
+Xin_hat = vae.decode(z).reshape((-1, 17, 365))
+```
+
+```{python}
+px.imshow(Xin.cpu()[0, :, 0:20])
+```
+
+```{python}
+px.imshow(Xin_hat.cpu().detach().numpy()[0, :, 0:20])
+```
+
+```{python}
+px.imshow(Xin_hat.cpu().detach().numpy()[0, :, 0:20] - Xin.cpu().numpy()[0, :, 0:20] )
+```
+
+```{python}
+def get_latents(autoencoder, data):
+    x_latents = []
+    with torch.no_grad():
+        for i, x in enumerate(data):
+            x = x.to(device).type(torch.float)
+            mu, log_var = autoencoder.encode(x)
+            x_latent = autoencoder.reparameterize(mu, log_var)
+            x_latents += [x_latent]
+    x_latents = torch.concat(x_latents)
+    return x_latents
+```
+
+```{python}
+hypothetical_data_latents = get_latents(
+    autoencoder = vae,
+    data = training_dataloader)
+
+hypothetical_data_latents = np.array(hypothetical_data_latents.to('cpu'))
+hypothetical_data_latents.shape
+```
+
+```{python}
+# temp = pd.concat([hypothetical_data_labels, pd.DataFrame(hypothetical_data_latents, columns = ['Latent1', 'Latent2'])], axis = 1)
+```
+
+```{python}
+from sklearn.manifold import TSNE
+X_embedded = TSNE(n_components=2, learning_rate='auto',
+                  init='random', perplexity=3).fit_transform(hypothetical_data_latents)
+```
+
+```{python}
+temp = pd.concat([hypothetical_data_labels, pd.DataFrame(X_embedded, columns = ['TSNE1', 'TSNE2'])], axis = 1)
+```
+
+```{python}
+px.scatter(temp, x = 'TSNE1', y = 'TSNE2', color='Year')
+```
+
+```{python}
+temp['LatLon']=temp['Latitude'].astype(str)+'_'+temp['Longitude'].astype(str)
+```
+
+```{python}
+px.scatter(temp, x = 'TSNE1', y = 'TSNE2', color='LatLon')
+```
+
+### Deprecated VAE version (loss went to nan more)
+
+```{python}
+# # KL divergence is important because we can't take the gradient of a sampling operation.
+# # penalizing KL is a way to force latent vectors towards each other (you can't get 
+# # good performanc just by putting each class far away from each other)
+
+# # have to cget samples (so we need mu and sigma) and have to track KL divergence
+
+# class VariationalEncoder(nn.Module):
+#     def __init__(self, latent_dims, in_vals = 17*365, hidden_units = 1024):
+#         super(VariationalEncoder, self).__init__()
+#         self.linear1 = nn.Linear(in_vals,hidden_units)
+#         self.linear2 = nn.Linear(hidden_units, latent_dims)
+#         self.linear3 = nn.Linear(hidden_units, latent_dims)
+
+#         self.N = torch.distributions.Normal(0, 1)
+#         self.N.loc = self.N.loc.cuda() # hack to get sampling on the GPU
+#         self.N.scale = self.N.scale.cuda()
+#         self.kl = 0
+
+#     def forward(self, x):
+# #         print(x.shape)
+#         x     = torch.flatten(x, start_dim=1)
+# #         print(x.shape)        
+#         x     = F.relu(self.linear1(x))
+        
+#         mu    = self.linear2(x)
+#         sigma = torch.exp(self.linear3(x))
+        
+#         z = mu + sigma*self.N.sample(mu.shape)
+#         self.kl = (sigma**2 + mu**2 - torch.log(sigma) - 1/2).sum()
+#         print(f'KL IS {self.kl}') 
+#         return z
+```
+
+```{python}
+# ve = VariationalEncoder(latent_dims= 512).to(device)
+# ve(next(iter(training_dataloader)) )
+```
+
+```{python}
+# class Decoder(nn.Module):
+#     def __init__(self, latent_dims, out_vals = 17*365, out_shape = (-1, 17, 365), hidden_units = 1024):
+#         super(Decoder, self).__init__()
+#         self.linear1 = nn.Linear(latent_dims, hidden_units)
+#         self.linear2 = nn.Linear(hidden_units, out_vals)
+#         self.out_shape = out_shape
+
+#     def forward(self, z):
+#         z = F.relu(self.linear1(z))
+#         z = torch.sigmoid(self.linear2(z))
+#         return z.reshape(self.out_shape)
+```
+
+```{python}
+# vd = Decoder(512,).to(device)
+#
+# vd(
+#     ve(
+#         next(iter(training_dataloader))
+#     ) 
+# )
+```
+
+```{python}
+# class VariationalAutoencoder(nn.Module):
+#     def __init__(self, latent_dims, in_vals, out_shape, hidden_units):
+#         super(VariationalAutoencoder, self).__init__()
+#         self.encoder = VariationalEncoder(latent_dims, in_vals, hidden_units)
+#         self.decoder = Decoder(latent_dims, in_vals, out_shape, hidden_units)
+
+#     def forward(self, x):
+#         z = self.encoder(x)
+#         return self.decoder(z)
+```
+
+```{python}
+# vae = VariationalAutoencoder(latent_dims = 512, 
+#                              in_vals = 17*365, 
+#                              out_shape = (-1, 17, 365), 
+#                              hidden_units = 1024).to(device)
+# vae(
+#     next(iter(training_dataloader))
+# ) 
+```
+
+
+```{python}
+# # autoencoder = VariationalAutoencoder(512).to(device)
+# # data = training_dataloader
+# # epochs = 2
+
+# def train(autoencoder, data, epochs=20, verbose = False):
+#     opt = torch.optim.AdamW(autoencoder.parameters())
+#     for epoch in tqdm(range(epochs)):
+#         for x_list in data:
+#             x = x_list#[0]
+# #             print(x.shape)
+#             x = x.to(device).type(torch.float)
+#             opt.zero_grad()
+#             x_hat = autoencoder(x)
+# #             print(x_hat)
+#             loss = ((x - x_hat)**2).sum() + autoencoder.encoder.kl
+#             loss.backward()
+#             opt.step()
+#             if torch.isinf(loss):
+#                 print('Loss is inf')
+#                 break
+#             if torch.isnan(loss):
+#                 print('Loss is nan')
+#                 break
+# #             print(loss)
+#         if verbose:
+#             print(f'loss {loss}')
+#     return autoencoder
+```
+
+
+
+```{python}
+# training_dataloader = DataLoader(
+#     WthrEncode(y = torch.from_numpy(hypothetical_data).to(device).to(torch.float)),
+#     batch_size = 500,
+#     shuffle = True
+# )
+
+# vae_untrained = VariationalAutoencoder(
+#     latent_dims = 17*365, 
+#     in_vals = 17*365, 
+#     out_shape = (-1, 17, 365), 
+#     hidden_units = 1024).to(device)
+
+# vae_trained = train(
+#     autoencoder = vae_untrained,
+#     data = training_dataloader,
+#     epochs = 30,
+#     verbose=True
+# )
+```
+
+```{python}
+# def get_latents(autoencoder, data):
+#     x_hats = []
+#     with torch.no_grad():
+# #         for i, x_list in enumerate(data):
+# #             x = x_list[0]
+#         for i, x in enumerate(data):
+#             x = x.to(device).type(torch.float)
+#             x_hat = autoencoder.encoder(x)
+#             x_hats += [x_hat]
+#     x_hats = torch.concat(x_hats)
+#     return x_hats
+```
+
+```{python}
+# get_latents(
+#     autoencoder = vae_untrained,
+#     data = training_dataloader)
+```
+
+```{python}
+# hypothetical_data_latents = get_latents(
+#     autoencoder = vae_trained,
+#     data = training_dataloader)
+
+# hypothetical_data_latents = np.array(hypothetical_data_latents.to('cpu'))
+```
+
+### Train VAE Dense (ONLY IN DEMO)
+
+### Train VAE CNN 1D
+
+```{python}
+#TODO reinit dataloader
+
+# let's start with hypothetical data containing different locations in the usa
+# mask = ((train_obs_uids.Latitude  == train_obs_uids.Latitude.min()) | 
+#         (train_obs_uids.Longitude == train_obs_uids.Longitude.max()))
+        
+
+# hypothetical_data = np.concatenate([
+#     propose_usa_grid_obs(
+#         idx = i,
+#         obs_lookup = train_obs_uids,
+#         ith_plantharvest = list(propose_plantharvest(first_doy = 60, last_doy = 170, range_pr = 1.1,
+#                                                      rng = np.random.default_rng())),
+#         W_type = 'raw') for i in 
+# #     tqdm(train_obs_uids.loc[mask, ].index) 
+#     tqdm(train_obs_uids.index) 
+# ], axis = 0)
+
+# # hypothetical_data_labels = train_obs_uids.loc[mask, ].reset_index(drop = True).copy()
+# hypothetical_data_labels = train_obs_uids.reset_index(drop = True).copy()
+```
+
+```{python}
+# let's start with hypothetical data containing different locations in the usa
+mask = ((train_obs_uids.Latitude  == train_obs_uids.Latitude.min()) | 
+        (train_obs_uids.Longitude == train_obs_uids.Longitude.max()))
+        
+
+hypothetical_data = np.concatenate([
+    propose_usa_grid_obs(
+        idx = i,
+        obs_lookup = train_obs_uids,
+        ith_plantharvest = list(propose_plantharvest(first_doy = 60, last_doy = 170, range_pr = 1.1,
+                                                     rng = np.random.default_rng())),
+        W_type = 'raw') for i in 
+    tqdm(train_obs_uids.loc[mask, ].index) 
+#     tqdm(train_obs_uids.index) 
+], axis = 0)
+
+hypothetical_data_labels = train_obs_uids.loc[mask, ].reset_index(drop = True).copy()
+# hypothetical_data_labels = train_obs_uids.reset_index(drop = True).copy()
+```
+
+```{python}
+x_std  = hypothetical_data.std(axis = 0)
+x_std[x_std == 0] = 1 # overwrite std 0s with 1
+x_mean = hypothetical_data.mean(axis = 0)
+```
+
+```{python}
+hypothetical_data = ((hypothetical_data - x_mean) /x_std)
+```
+
+```{python}
+hypothetical_data.shape
+```
+
+```{python}
+training_dataloader = DataLoader(
+    WthrEncode(y = torch.from_numpy(hypothetical_data).to(device).to(torch.float)),
+    batch_size = 50,
+    shuffle = True
+)
+```
+
+```{python}
+next(iter(training_dataloader)).shape
+```
+
+```{python}
+# The problem: 
+# With a Length of 365, I can't use a stack of convolutions and convolutional transposes and guarantee that the output will have the right length (length can be rounded down)
+# The solution is to use 
+
+# The hacky plan: 
+
+
+# Start with a list representing all layer's out_padding or not. Iterate until condition is met.
+
+
+# def L_out_conv1d(
+#     L_in = 92, kernel_size=3, stride = 2, padding=1, dilation = 1
+# ): return ((L_in +2*padding-dilation*(kernel_size-1)-1)/stride)+1    
+# L_out_conv1d()
+
+# def L_out_convT1d(
+#     L_in = 46, kernel_size=3, stride = 2, padding=1, output_padding=0, dilation = 1
+# ): return (L_in - 1)*stride-2*padding+dilation*(kernel_size-1)+output_padding+1
+# L_out_convT1d()
+
+
+# increment list
+# def increment_list(
+#     in_list = [0, 0, 0],
+#     min_value = 0,
+#     max_value = 1):
+#     # Check that all entries are within min/max
+#     if False in [True if e <= max_value else False for e in in_list]:
+#         print('Value(s) above maximum!')
+#     elif False in [True if e >= min_value else False for e in in_list]:
+#         print('Value(s) below minimum!')
+#     elif [e for e in in_list if e != max_value] == []:
+#         print('List at maximum value!')
+#     else:    
+#         # start cursor at first non-max value
+#         for i in range(len(in_list)):
+#             if in_list[i] < max_value:
+#                 in_list[i] += 1
+#                 break
+#             else:
+#                 in_list[i] = min_value
+#     return(in_list)
+
+# # in_list = [2, 1, 2]
+# # for i in range(10):
+# #     print(in_list)
+# #     in_list = increment_list(
+# #     in_list = in_list,
+# #     max_value = 2)
+# # print(in_list)   
+
+# layer_output_padding = [0, 0, 0, 0, 0, 0, 0, 0]
+
+# # for j in range(10):
+# while True:
+#     old_layer_output_padding = layer_output_padding.copy()
+    
+#     tensor_Ls = []
+    
+#     ne = nn.ModuleList([
+#         nn.Sequential(nn.Conv1d(
+#         16, out_channels=16, kernel_size= 3, stride= 2, padding  = 1), nn.BatchNorm1d(
+#         16), nn.LeakyReLU())
+#         for i in range(len(layer_output_padding))
+#     ])
+
+#     nd = nn.ModuleList([
+#         nn.Sequential(nn.ConvTranspose1d(
+#         16, 16, 
+#         kernel_size=3, stride = 2, padding=1, output_padding=layer_output_padding[i]), nn.BatchNorm1d(
+#         16), nn.LeakyReLU())
+#         for i in range(len(layer_output_padding))
+#     ])
+    
+#     xin = torch.zeros((1, 16, 365))
+#     tensor_Ls += [list(xin.shape)[-1]]
+#     for mod in ne:
+#         xin = mod(xin)
+#         tensor_Ls += [list(xin.shape)[-1]]
+#     tensor_Ls += [str(tensor_Ls[-1])]
+#     for mod in nd:
+#         xin = mod(xin)
+#         tensor_Ls += [list(xin.shape)[-1]]
+    
+#     if False == (tensor_Ls[0] == tensor_Ls[-1]):
+#         layer_output_padding = increment_list(
+#             in_list = layer_output_padding,
+#             min_value = 0,
+#             max_value = 1)
+#     else:
+#         print('done!')
+        
+#     if layer_output_padding == old_layer_output_padding: 
+#         break
+    
+# print(tensor_Ls)
+# layer_output_padding
+```
+
+
+
+```{python}
+# using models in https://github.com/AntixK/PyTorch-VAE as reference
+class CNNVAE(nn.Module):
+    def __init__(self,
+                 in_channels = 17, 
+                 hidden_dims = [32, 64],
+                 latent_dims = 1024, 
+                 obs_shape = (1, 17, 365) # needed to figure out the right dim between latents and en/decoders
+                ):
+        super(CNNVAE, self).__init__()
+        ## Encoder =================================================================================
+        hidden_dims = [in_channels]+hidden_dims
+        modules = []
+        for i in range(len(hidden_dims) - 1):
+#             print(hidden_dims[i], hidden_dims[i+1])
+            modules.append(
+                nn.Sequential(
+                    nn.Conv1d(hidden_dims[i], out_channels=hidden_dims[i+1],
+                              kernel_size= 3, stride= 2, padding  = 1),
+                    nn.BatchNorm1d(hidden_dims[i+1]),
+                    nn.LeakyReLU()
+                )
+            )
+        self.encoder = nn.Sequential(*modules)
+
+    
+#         modules = []
+#         for h_dim in hidden_dims:
+#             modules.append(
+#                 nn.Sequential(
+#                     nn.Conv1d(in_channels, out_channels=h_dim,
+#                               kernel_size= 3, stride= 2, padding  = 1),
+#                     nn.BatchNorm1d(h_dim),
+#                     nn.LeakyReLU())
+#             )
+#             in_channels = h_dim
+#         self.encoder = nn.Sequential(*modules)
+
+        ### Now set up functions to get mu/var .....................................................
+        # this code uses a work around to find an acceptable input dim for the linear layer that  
+        # connects the encoder's flatten and produces the latents with the fc_mu/fc_var methods. 
+        # In the example code this value is `hidden_dims[-1]*4`. That may be specific to the 2D case
+        # or may be specific to their chosen structure.
+        # it works by 
+        # 1. make a tensor of the same shape of one obs and
+        # 2. pass it through the encoder
+        # 3. for a 1d conv, retain the last 2 dims
+        # 4. take the product to get the input size for fc_mu/fc_var
+        collapse_dims = self.encoder(torch.zeros(obs_shape)).shape[-2:]
+        self.collapse_dims = collapse_dims
+        print(collapse_dims)
+        adjacent_dims = int(torch.prod(torch.tensor(collapse_dims)))
+#         print(adjacent_dims)
+
+        self.fc_mu = nn.Linear(adjacent_dims, latent_dims)
+        self.fc_var = nn.Linear(adjacent_dims, latent_dims)
+
+        ## Decoder =================================================================================
+        self.decoder_input = nn.Linear(latent_dims, adjacent_dims)
+        hidden_dims.reverse()
+        # add in the output channels
+#         hidden_dims += [in_channels]
+#         print(hidden_dims)
+        modules = []
+        
+        ### Figure out the right output_padding of a given number of layers ........................
+        # This is a perhaps less efficient way to do this (Instead of calculating the Lout)
+        # increment list
+        def increment_list(
+            in_list = [0, 0, 0],
+            min_value = 0,
+            max_value = 1):
+            # Check that all entries are within min/max
+            if False in [True if e <= max_value else False for e in in_list]:
+                print('Value(s) above maximum!')
+            elif False in [True if e >= min_value else False for e in in_list]:
+                print('Value(s) below minimum!')
+            elif [e for e in in_list if e != max_value] == []:
+                print('List at maximum value!')
+            else:    
+                # start cursor at first non-max value
+                for i in range(len(in_list)):
+                    if in_list[i] < max_value:
+                        in_list[i] += 1
+                        break
+                    else:
+                        in_list[i] = min_value
+            return(in_list)
+        
+        layer_output_padding = [0 for e in range(len(hidden_dims)-1)]
+        while True:
+            old_layer_output_padding = layer_output_padding.copy()
+            
+            ne = nn.ModuleList([
+                nn.Sequential(nn.Conv1d(
+                obs_shape[1], out_channels=obs_shape[1], kernel_size= 3, stride= 2, padding  = 1), nn.BatchNorm1d(
+                obs_shape[1]), nn.LeakyReLU())
+                for i in range(len(layer_output_padding))
+            ])
+
+            nd = nn.ModuleList([
+                nn.Sequential(nn.ConvTranspose1d(
+                obs_shape[1], obs_shape[1], 
+                kernel_size=3, stride = 2, padding=1, output_padding=layer_output_padding[i]), nn.BatchNorm1d(
+                obs_shape[1]), nn.LeakyReLU())
+                for i in range(len(layer_output_padding))
+            ])
+            
+            tensor_Ls = []
+            xin = torch.zeros(obs_shape)
+            tensor_Ls += [list(xin.shape)[-1]]
+            for mod in ne:
+                xin = mod(xin)
+                tensor_Ls += [list(xin.shape)[-1]]
+            tensor_Ls += [str(tensor_Ls[-1])]
+            for mod in nd:
+                xin = mod(xin)
+                tensor_Ls += [list(xin.shape)[-1]]
+
+            if False == (tensor_Ls[0] == tensor_Ls[-1]):
+                layer_output_padding = increment_list(
+                    in_list = layer_output_padding,
+                    min_value = 0,
+                    max_value = 1)
+            else:
+                pass
+#                 print('done!')
+
+            if layer_output_padding == old_layer_output_padding: 
+                break
+        #tensor_Ls                
+        self.layer_output_padding = layer_output_padding
+        
+        ### Now create decoder network .............................................................
+#         print(len(hidden_dims))
+#         print(hidden_dims)
+#         print(len(layer_output_padding))
+#         print(layer_output_padding)
+    
+        for i in range(len(hidden_dims) - 1): 
+            if i  !=  (len(hidden_dims) - 2): 
+                modules.append(
+                    nn.Sequential(
+                        nn.ConvTranspose1d(hidden_dims[i],
+                                           hidden_dims[i + 1],
+                                           kernel_size=3,
+                                           stride = 2,
+                                           padding=1,
+                                           output_padding=layer_output_padding[i]),
+                        nn.BatchNorm1d(hidden_dims[i + 1]),
+                        nn.LeakyReLU()
+                    )
+                )
+            else: # last layer
+                modules.append(
+                    nn.Sequential(
+                        nn.ConvTranspose1d(hidden_dims[i],
+                                           hidden_dims[i + 1],
+                                           kernel_size=3,
+                                           stride = 2,
+                                           padding=1,
+                                           output_padding=layer_output_padding[i])
+#                         nn.Tanh()
+#                             
+                    )
+                )        
+        self.decoder = nn.Sequential(*modules)
+        self.decoder_last_layer = nn.Linear(obs_shape[-1], obs_shape[-1])
+        
+
+#         self.final_layer = nn.Sequential(
+#                             nn.ConvTranspose1d(hidden_dims[-1],
+#                                                hidden_dims[-1],
+#                                                kernel_size=3,
+#                                                stride=2,
+#                                                padding=1,
+#                                                output_padding=1),
+#                             nn.BatchNorm1d(hidden_dims[-1]),
+#                             nn.LeakyReLU(),
+#                             nn.Conv1d(hidden_dims[-1], out_channels= 3,
+#                                       kernel_size= 3, padding= 1),
+#                             nn.Tanh())
+        
+    def encode(self, x):
+        res = self.encoder(x)
+        res = torch.flatten(res, start_dim = 1)
+        mu = self.fc_mu(res)
+        log_var = self.fc_var(res)
+        return [mu, log_var]
+
+    def decode(self, z):
+        z = self.decoder_input(z)
+        z = z.reshape(tuple([-1]+list(self.collapse_dims)))
+        out = self.decoder(z) # this is more complex if it's a cnn. The example uses an adapter layer
+        out = self.decoder_last_layer(out)
+        return(out)
+
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        return eps * std + mu
+
+    def forward(self, x, **kwargs):
+        mu, log_var = self.encode(x)
+        z = self.reparameterize(mu, log_var)
+        return [self.decode(z), x, mu, log_var]
+
+    def loss_function(self, *args, **kwargs):
+        recons = args[0]
+        x = args[1]
+        mu = args[2]
+        log_var = args[3]
+
+        kld_weight = kwargs['M_N'] # Account for the minibatch samples from the dataset
+
+        recons_loss =F.mse_loss(recons, x)
+        kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
+
+        loss = recons_loss + kld_weight * kld_loss
+        return loss
+    
+        def sample(self, num_samples, current_device, **kwargs):
+            z = torch.randn(num_samples, self.latent_dim)
+            z = z.to(current_device)
+            samples = self.decode(z)
+            return samples        
+        def generate(self, x):
+            return self.forward(x)[0]      
+
+vae = CNNVAE(
+    in_channels = 17,   
+    hidden_dims = [16, 32, 64, 128, 256, 512, 
+                  ],
+    latent_dims = 1024,
+    obs_shape = (1, 17, 365)).to(device)
+
+# vae.decoder
+```
+
+```{python}
+# Xin = next(iter(training_dataloader))
+# mu, log_var = vae.encode(Xin)
+# z = vae.reparameterize(mu, log_var)
+
+# z = vae.decoder_input(z)
+# z = z.reshape(tuple([-1]+list(vae.collapse_dims)))
+# out = vae.decoder(z) # this is more complex if it's a cnn. The example uses an adapter layer
+# out = vae.decoder_last_layer(out)
+# out.shape
+```
+
+```{python}
+train_vae(
+    vae = vae,
+    data = training_dataloader,
+    epochs=50000,
+    verbose = False
+)
+```
+
+
+```{python}
+Xin = next(iter(training_dataloader))
+px.imshow(Xin.cpu().detach().numpy()[0, :, :])
+```
+
+```{python}
+px.imshow(
+    vae.decode(vae.reparameterize(
+    mu = vae.encode(Xin)[0],
+    log_var = vae.encode(Xin)[1]
+          )).cpu().detach().numpy()[0, :, :])
+```
+
+```{python}
+hypothetical_data_latents = get_latents(
+    autoencoder = vae,
+    data = training_dataloader)
+
+hypothetical_data_latents = np.array(hypothetical_data_latents.to('cpu'))
+hypothetical_data_latents.shape
+```
+
+```{python}
+# from sklearn.manifold import TSNE
+X_embedded = TSNE(n_components=2, learning_rate='auto',
+                  init='random', perplexity=3).fit_transform(hypothetical_data_latents)
+```
+
+```{python}
+temp = pd.concat([hypothetical_data_labels, pd.DataFrame(X_embedded, columns = ['TSNE1', 'TSNE2'])], axis = 1)
+```
+
+```{python}
+px.scatter(temp, x = 'TSNE1', y = 'TSNE2', color='Year')
+```
+
+```{python}
+temp['LatLon']=temp['Latitude'].astype(str)+'_'+temp['Longitude'].astype(str)
+```
+
+```{python}
+px.scatter(temp, x = 'TSNE1', y = 'TSNE2', color='LatLon')
+```
+
+### Train VAE CNN 2D
+
+```{python}
+# let's start with hypothetical data containing different locations in the usa
+mask = ((train_obs_uids.Latitude  == train_obs_uids.Latitude.min()) | 
+        (train_obs_uids.Longitude == train_obs_uids.Longitude.max()))
+        
+
+hypothetical_data = np.concatenate([
+    propose_usa_grid_obs(
+        idx = i,
+        obs_lookup = train_obs_uids,
+        ith_plantharvest = list(propose_plantharvest(first_doy = 60, last_doy = 170, range_pr = 1.1,
+                                                     rng = np.random.default_rng())),
+        W_type = 'hilbert') for i in 
+    tqdm(train_obs_uids.loc[mask, ].index) 
+], axis = 0)
+
+hypothetical_data_labels = train_obs_uids.loc[mask, ].reset_index(drop = True).copy()
+```
+
+```{python}
+x_std  = hypothetical_data.std(axis = 0)
+x_std[x_std == 0] = 1 # overwrite std 0s with 1
+x_mean = hypothetical_data.mean(axis = 0)
+```
+
+```{python}
+hypothetical_data = ((hypothetical_data - x_mean) /x_std)
+```
+
+```{python}
+hypothetical_data.shape
+```
+
+```{python}
+training_dataloader = DataLoader(
+    WthrEncode(y = torch.from_numpy(hypothetical_data).to(device).to(torch.float)),
+    batch_size = 50,
+    shuffle = True
+)
+```
+
+```{python}
+# using models in https://github.com/AntixK/PyTorch-VAE as reference
+class CNN2VAE(nn.Module):
+    def __init__(self,
+                 in_channels = 17, 
+                 hidden_dims = [32, 64],
+                 latent_dims = 1024, 
+                 obs_shape = (1, 17, 365) # needed to figure out the right dim between latents and en/decoders
+                ):
+        super(CNN2VAE, self).__init__()
+        
+        # Check if the network is too deep
+        # if the h/w is halved each time, what is the maximum number of layers that I could have and still 
+        # have at least a length of 2 on the shortest side
+        log2_min_hw = int(torch.log2(torch.as_tensor(min(obs_shape[2:]))))
+        if (len(hidden_dims) > log2_min_hw):
+            print('Number of layers is larger than expected:')
+            print(f'{len(hidden_dims)} = # layers')
+            print(f'{log2_min_hw} = # max layers (`log2_min_hw`:)')
+
+        
+        
+        ## Encoder =================================================================================
+        hidden_dims = [in_channels]+hidden_dims
+        modules = []
+        for i in range(len(hidden_dims) - 1):
+#             print(hidden_dims[i], hidden_dims[i+1])
+            modules.append(
+                nn.Sequential(
+                    nn.Conv2d(hidden_dims[i], out_channels=hidden_dims[i+1],
+                              kernel_size= (3,  3), stride= (2, 2), padding  = (1, 1)),
+                    nn.BatchNorm2d(hidden_dims[i+1]),
+                    nn.LeakyReLU()
+                )
+            )
+        self.encoder = nn.Sequential(*modules)
+
+        ### Now set up functions to get mu/var .....................................................
+        # this code uses a work around to find an acceptable input dim for the linear layer that  
+        # connects the encoder's flatten and produces the latents with the fc_mu/fc_var methods. 
+        # In the example code this value is `hidden_dims[-1]*4`. That may be specific to the 2D case
+        # or may be specific to their chosen structure.
+        # it works by 
+        # 1. make a tensor of the same shape of one obs and
+        # 2. pass it through the encoder
+        # 3. for a 2d conv, retain the last 2 dims
+        # 4. take the product to get the input size for fc_mu/fc_var
+        collapse_dims = self.encoder(torch.zeros(obs_shape)).shape[-3:]
+#         collapse_dims = self.encoder(torch.zeros(obs_shape)).shape[-2:]
+        self.collapse_dims = collapse_dims
+#         print(collapse_dims)
+        adjacent_dims = int(torch.prod(torch.tensor(collapse_dims)))
+#         print(adjacent_dims)
+
+        self.fc_mu = nn.Linear(adjacent_dims, latent_dims)
+        self.fc_var = nn.Linear(adjacent_dims, latent_dims)
+
+        ## Decoder =================================================================================
+        self.decoder_input = nn.Linear(latent_dims, adjacent_dims)
+        hidden_dims.reverse()
+        # add in the output channels
+#         hidden_dims += [in_channels]
+#         print(hidden_dims)
+        modules = []
+        ### Now create decoder network .............................................................
+    
+        for i in range(len(hidden_dims) - 1): 
+            if i  !=  (len(hidden_dims) - 2): 
+                modules.append(
+                    nn.Sequential(
+                        nn.ConvTranspose2d(hidden_dims[i],
+                                           hidden_dims[i + 1],
+                                           kernel_size=(3, 3), 
+                                           stride = (2, 2),
+                                           padding=(1, 1),
+                                           output_padding=1
+#                                            output_padding=layer_output_padding[i]
+                        ),
+                        nn.BatchNorm2d(hidden_dims[i + 1]),
+                        nn.LeakyReLU()
+                    )
+                )
+            else: # last layer
+                modules.append(
+                    nn.Sequential(
+                        nn.ConvTranspose2d(hidden_dims[i],
+                                           hidden_dims[i + 1],
+                                           kernel_size=(3, 3), 
+                                           stride = (2, 2),
+                                           padding=(1, 1),
+                                           output_padding=1
+#                                            output_padding=layer_output_padding[i]
+                        ),
+                            nn.Tanh()
+                    )
+                )        
+        self.decoder = nn.Sequential(*modules)
+#         self.decoder_last_layer = nn.Linear(obs_shape[1], obs_shape[1])
+                
+    def encode(self, x):
+        res = self.encoder(x)
+        res = torch.flatten(res, start_dim = 1)
+        mu = self.fc_mu(res)
+        log_var = self.fc_var(res)
+        return [mu, log_var]
+
+    def decode(self, z):
+        z = self.decoder_input(z)
+        z = z.reshape(tuple([-1]+list(self.collapse_dims)))
+        out = self.decoder(z) # this is more complex if it's a cnn. The example uses an adapter layer
+#         out = self.decoder_last_layer(out)
+        return(out)
+
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        return eps * std + mu
+
+    def forward(self, x, **kwargs):
+        mu, log_var = self.encode(x)
+        z = self.reparameterize(mu, log_var)
+        return [self.decode(z), x, mu, log_var]
+
+    def loss_function(self, *args, **kwargs):
+        recons = args[0]
+        x = args[1]
+        mu = args[2]
+        log_var = args[3]
+
+        kld_weight = kwargs['M_N'] # Account for the minibatch samples from the dataset
+
+        recons_loss =F.mse_loss(recons, x)
+        kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
+
+        loss = recons_loss + kld_weight * kld_loss
+        return loss
+    
+        def sample(self, num_samples, current_device, **kwargs):
+            z = torch.randn(num_samples, self.latent_dim)
+            z = z.to(current_device)
+            samples = self.decode(z)
+            return samples        
+        def generate(self, x):
+            return self.forward(x)[0]      
+
+        
+vae = CNN2VAE(
+    in_channels = 17,   
+    hidden_dims = [16
+                  ],
+    latent_dims = 1024,
+    obs_shape = (1, 17, 16, 32)).to(device)
+
+train_vae(
+    vae = vae,
+    data = training_dataloader,
+    epochs=2000,
+    verbose = False
+)
+```
+
+```{python}
+Xin = next(iter(training_dataloader))
+mu, log_var = vae.encode(Xin)
+z = vae.reparameterize(mu, log_var)
+Xin_hat = vae.decode(z)
+```
+
+```{python}
+i = 16
+px.imshow(Xin.cpu()[0, i, :, :])
+```
+
+```{python}
+px.imshow(Xin_hat.cpu().detach().numpy()[0, i, :, :])
+```
+
+### Train VAE RNN
+
+```{python}
+# let's start with hypothetical data containing different locations in the usa
+mask = ((train_obs_uids.Latitude  == train_obs_uids.Latitude.min()) | 
+        (train_obs_uids.Longitude == train_obs_uids.Longitude.max()))
+        
+hypothetical_data = np.concatenate([
+    propose_usa_grid_obs(
+        idx = i,
+        obs_lookup = train_obs_uids,
+        ith_plantharvest = list(propose_plantharvest(first_doy = 60, last_doy = 170, range_pr = 1.1,
+                                                     rng = np.random.default_rng())),
+        W_type = 'raw') for i in 
+    tqdm(train_obs_uids.loc[mask, ].index) 
+], axis = 0)
+
+hypothetical_data_labels = train_obs_uids.loc[mask, ].reset_index(drop = True).copy()
+```
+
+```{python}
+# Swap to match expected shape for time series
+hypothetical_data = hypothetical_data.swapaxes(1,2)
+```
+
+```{python}
+x_std  = hypothetical_data.std(axis = 0)
+x_std[x_std == 0] = 1 # overwrite std 0s with 1
+x_mean = hypothetical_data.mean(axis = 0)
+```
+
+```{python}
+hypothetical_data = ((hypothetical_data - x_mean) /x_std)
+```
+
+```{python}
+training_dataloader = DataLoader(
+    WthrEncode(y = torch.from_numpy(hypothetical_data).to(device).to(torch.float)),
+    batch_size = 50,
+    shuffle = True
+)
+```
+
+```{python}
+# For LSTMs:
+# output, (h_n, c_n)
+
+    # output = sequence
+    #       Directions * Hidden_size
+    # N, L, D*H_out
+
+    # h_n = hidden state for each element of sequence
+    # D*num_layers, H_out
+
+    # c_n = cell state for each element of sequence
+    # D*num_layers, Hcell
+
+class LSTMVAE(nn.Module):
+    def __init__(self,
+                 in_channels = 17, 
+                 hidden_dims = [32, 64],
+                 num_layers = [1, 1],
+                 dropouts = [0, 0],
+                 latent_dims = 1024, 
+                 obs_shape = (1, 365, 17) # needed to figure out the right dim between latents and en/decoders
+                ):
+        super(LSTMVAE, self).__init__()
+        ## Encoder =================================================================================
+        hidden_dims = [in_channels]+hidden_dims
+        modules = []
+        for i in range(len(hidden_dims) - 1):
+#             print(hidden_dims[i], hidden_dims[i+1])
+            modules.append(
+                    nn.LSTM(
+                        input_size = hidden_dims[i],
+                        hidden_size= hidden_dims[i+1], # hidden state features
+                        num_layers = num_layers[i], # number of lstms stacked
+                        bias = True,
+                        batch_first = True, 
+                        dropout = dropouts[i], # dropouts between layers
+                        bidirectional = False
+                    )
+            )
+        self.encoder = nn.ModuleList(modules)
+     
+        ### Now set up functions to get mu/var .....................................................
+        # this code uses a work around to find an acceptable input dim for the linear layer that  
+        # connects the encoder's flatten and produces the latents with the fc_mu/fc_var methods. 
+        # In the example code this value is `hidden_dims[-1]*4`. That may be specific to the 2D case
+        # or may be specific to their chosen structure.
+        # it works by 
+        # 1. make a tensor of the same shape of one obs and
+        # 2. pass it through the encoder
+        # 3. for a 1d conv, retain the last 2 dims
+        # 4. take the product to get the input size for fc_mu/fc_var
+        
+        xin = torch.zeros(obs_shape)
+        for mod in self.encoder:
+            xin = mod(xin)[0]
+#         collapse_dims, (devnull0, devnull1) = self.encoder()
+        collapse_dims = xin.shape[-2:]
+        self.collapse_dims = collapse_dims
+#         print(collapse_dims)
+        adjacent_dims = int(torch.prod(torch.tensor(collapse_dims)))
+#         print(adjacent_dims)
+
+        self.fc_mu = nn.Linear(adjacent_dims, latent_dims)
+        self.fc_var = nn.Linear(adjacent_dims, latent_dims)
+
+        ## Decoder =================================================================================
+        self.decoder_input = nn.Linear(latent_dims, adjacent_dims)
+        hidden_dims.reverse()
+        # add in the output channels
+        modules = []
+        
+        ### Now create decoder network .............................................................
+        for i in range(len(hidden_dims) - 1): 
+            if i  !=  (len(hidden_dims) - 2): 
+                modules.append(
+                        nn.LSTM(
+                            input_size = hidden_dims[i],
+                            hidden_size= hidden_dims[i+1], # hidden state features
+                            num_layers = num_layers[i], # number of lstms stacked
+                            bias = True,
+                            batch_first = True, 
+                            dropout = dropouts[i], # dropouts between layers
+                            bidirectional = False
+                        )
+                    )
+            else: # last layer
+                modules.append(
+                    nn.LSTM(
+                        input_size = hidden_dims[i],
+                        hidden_size= hidden_dims[i+1], # hidden state features
+                        num_layers = num_layers[i], # number of lstms stacked
+                        bias = True,
+                        batch_first = True, 
+                        dropout = dropouts[i], # dropouts between layers
+                        bidirectional = False
+                    )
+                )
+#                 modules.append(
+#                     nn.Linear(obs_shape[-1], obs_shape[-1])
+#                 )
+#                 print(obs_shape[-1])
+                        
+        self.decoder = nn.ModuleList(modules)
+        self.decoder_last_layer = nn.Linear(obs_shape[-1], obs_shape[-1])
+        
+        
+    def encode(self, x):
+        for mod in self.encoder:
+            x = mod(x)[0]
+        res = torch.flatten(x, start_dim = 1)
+#         res = self.encoder(x)
+#         res = torch.flatten(res, start_dim = 1)
+        mu = self.fc_mu(res)
+        log_var = self.fc_var(res)
+        return [mu, log_var]
+
+    def decode(self, z):
+        z = self.decoder_input(z)
+        z = z.reshape(tuple([-1]+list(self.collapse_dims)))
+        
+        out = z
+#         # have to do something a little more complicated because otherwise the 0th entry of the 
+#         # tensor is passed into the linear layer at the end but because LSTM returns a list I need
+#         # to pull the 0th entry most of the time.        
+        for mod in self.decoder:
+            out = mod(out)[0]
+            
+        out = self.decoder_last_layer(out)    
+        return(out)
+
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        return eps * std + mu
+
+    def forward(self, x, **kwargs):
+        mu, log_var = self.encode(x)
+        z = self.reparameterize(mu, log_var)
+        return [self.decode(z), x, mu, log_var]
+
+    def loss_function(self, *args, **kwargs):
+        recons = args[0]
+        x = args[1]
+        mu = args[2]
+        log_var = args[3]
+        kld_weight = kwargs['M_N'] # Account for the minibatch samples from the dataset
+
+        recons_loss =F.mse_loss(recons, x)
+        kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
+
+        loss = recons_loss + kld_weight * kld_loss
+        return loss
+    
+#         def sample(self, num_samples, current_device, **kwargs):
+#             z = torch.randn(num_samples, self.latent_dim)
+#             z = z.to(current_device)
+#             samples = self.decode(z)
+#             return samples        
+#         def generate(self, x):
+#             return self.forward(x)[0]            
+        
+vae = LSTMVAE(
+    in_channels = 17,   
+    hidden_dims = [32, 64, 64, 64,],
+    num_layers  = [1,   1,  1,  1,],
+    dropouts    = [0,   0,  0,  0,],
+    latent_dims = 1024,
+    obs_shape = (1, 365, 17)).to(device)
+```
+
+```{python}
+vae
+```
+
+```{python}
+train_vae(
+    vae = vae,
+    data = training_dataloader,
+    epochs=4000,
+    verbose = False
+)
+```
+
+```{python}
+Xin = next(iter(training_dataloader))
+px.imshow(Xin.cpu().detach().numpy()[0, :, :].swapaxes(0,1))
+```
+
+```{python}
+Xin_mu, Xin_var = vae.encode(Xin)
+Xin_mu.shape
+
+Xin_z = vae.reparameterize(
+    mu = Xin_mu,
+    log_var = Xin_mu
+)
+Xin_z.shape
+
+Xin_hat = vae.decode(Xin_z)
+Xin_hat.shape
+
+px.imshow(Xin_hat.cpu().detach().numpy()[0, :, :].swapaxes(0,1))
+```
+
+## VAE Soil
+
+```{python}
+
+
+SMat.shape
+```
+
+```{python}
+x_std  = SMat.std(axis = 0)
+x_std[x_std == 0] = 1 # overwrite std 0s with 1
+x_mean = SMat.mean(axis = 0)
+
+SMat = ((SMat - x_mean) /x_std)
+```
+
+```{python}
+training_dataloader = DataLoader(
+    BigDataset(
+        lookup_obs = list(set(obs_env_lookup[:, 2])), # list(set(obs_env_lookup[:, 2])) -> phno idxs for each env (1 for each)
+        lookup_env = obs_env_lookup,
+        S = torch.from_numpy(SMat).to(torch.float32).to(device)
+    ), 
+    batch_size= 50, 
+    shuffle=True)
+```
+
+```{python}
+[e.shape for e in next(iter(training_dataloader))]
+```
+
+```{python}
+class BaseAE(nn.Module):
+    def __init__(self,
+                 in_vals = 23, 
+                 hidden_units = [16, 8],
+                 dropouts    = [0, 0],
+                 latent_dims = 4, 
+                ):
+        super(BaseAE, self).__init__()
+        
+        hidden_units = [in_vals]+hidden_units
+        modules = []
+        for i in range(len(hidden_units)-1):
+            modules += [
+                nn.Sequential(
+                nn.Flatten(),            
+                nn.Linear(hidden_units[i],  hidden_units[i+1]), 
+                nn.ReLU(),
+                nn.Dropout(dropouts[i])
+            )]
+        self.encoder = nn.ModuleList(modules)
+                
+        self.fc_mu  = nn.Linear(hidden_units[-1], latent_dims)
+        
+        hidden_units.reverse()
+        self.decoder_input = nn.Linear(latent_dims, hidden_units[0])
+        
+        modules = []
+        for i in range(len(hidden_units)-1):
+            modules += [
+                nn.Sequential(
+                nn.Linear(hidden_units[i],  hidden_units[i+1]), 
+                nn.ReLU(),
+                nn.Dropout(dropouts[i])
+            )]
+        self.decoder = nn.ModuleList(modules)
+        
+    def encode(self, x):
+        res = x
+        for mod in self.encoder:
+            res = mod(res)
+        out = self.fc_mu(res)
+        return(out)
+
+    def decode(self, z):
+        out = self.decoder_input(z)
+        for mod in self.decoder:
+            out = mod(out)
+        return(out)
+
+
+    def forward(self, x, **kwargs):
+        return [self.decode(self.encode(x)), x]
+
+    def loss_function(self, *args, **kwargs):
+        recons = args[0]
+        x = args[1]
+
+        recons_loss =F.mse_loss(recons, x)
+
+        loss = recons_loss
+#         print(loss, recons_loss.detach(), -kld_loss.detach())
+    #         return {'loss': loss, 'Reconstruction_Loss':recons_loss.detach(), 'KLD':-kld_loss.detach()}
+        return loss
+    
+#         def sample(self, num_samples, current_device, **kwargs):
+#             z = torch.randn(num_samples, self.latent_dim)
+#             z = z.to(current_device)
+#             samples = self.decode(z)
+#             return samples
+        
+#         def generate(self, x):
+#             return self.forward(x)[0]      
+```
+
+```{python}
+def train_vae_temp(
+    vae,
+    data,
+    epochs=20,
+    verbose = False
+):    
+    opt = torch.optim.AdamW(vae.parameters())
+    for epoch in tqdm(range(epochs)):
+        for x in data:
+            opt.zero_grad()
+            x = x[0] # <------------------------------
+            
+            x_hat = vae(x)
+            inverse_batches = 1/len(training_dataloader)
+            loss = vae.loss_function(*x_hat, M_N = inverse_batches)
+            loss.backward()
+            opt.step()
+            if torch.isinf(loss):
+                print('Loss is inf')
+                break
+            if torch.isnan(loss):
+                print('Loss is nan')
+                break
+        if verbose:
+            print(f'loss {loss}')
+        if torch.isinf(loss) or torch.isnan(loss):
+            break
+```
+
+```{python}
+# it's possible to get this to train on as few as 2 latent dims but that doesn't seem necessary
+vae = BaseAE(
+    in_vals = 23, 
+    hidden_units = [16, 16, 16, 16],
+    dropouts    = [0.1, 0.1, 0.1, 0.1],
+    latent_dims = 8, 
+).to(device)
+
+# vae(next(iter(training_dataloader))[0])
+```
+
+```{python}
+train_vae_temp(
+    vae = vae,
+    data = training_dataloader,
+    epochs=5000,
+    verbose = False
+)
+```
+
+```{python}
+# Xin = next(iter(training_dataloader))[0]
+Xin = torch.from_numpy(SMat).to(torch.float32).to(device)
+Xin
+```
+
+```{python}
+with torch.no_grad():
+    Xin_hat = vae(Xin)[0]
+```
+
+```{python}
+px.imshow(Xin.cpu()[0:20, :])
+```
+
+```{python}
+px.imshow(Xin_hat.cpu().detach().numpy()[0:20, :])
+```
+
+
+
+```{python}
+# another try to get around kl loss becoming nan
+# using models in https://github.com/AntixK/PyTorch-VAE as reference
+class BaseVAE(nn.Module):
+    def __init__(self,
+                 in_vals = 23, 
+                 hidden_units = [16, 8],
+                 dropouts    = [0, 0],
+                 latent_dims = 4, 
+                ):
+        super(BaseVAE, self).__init__()
+        
+        hidden_units = [in_vals]+hidden_units
+        modules = []
+        for i in range(len(hidden_units)-1):
+            modules += [
+                nn.Sequential(
+                nn.Flatten(),            
+                nn.Linear(hidden_units[i],  hidden_units[i+1]), 
+                nn.ReLU(),
+                nn.Dropout(dropouts[i])
+            )]
+        self.encoder = nn.ModuleList(modules)
+        
+#         self.encoder = nn.Sequential(
+#             nn.Flatten(),
+#             nn.Linear(in_vals,  hidden_units), nn.ReLU(),
+#             nn.Linear(hidden_units,  hidden_units), nn.ReLU(),
+#             nn.Linear(hidden_units,  hidden_units), nn.ReLU(),
+#             nn.Linear(hidden_units,  hidden_units), nn.ReLU(),
+#         )
+        
+        self.fc_mu  = nn.Linear(hidden_units[-1], latent_dims)
+        self.fc_var = nn.Linear(hidden_units[-1], latent_dims)
+        
+        hidden_units.reverse()
+        self.decoder_input = nn.Linear(latent_dims, hidden_units[0])
+        
+        modules = []
+        for i in range(len(hidden_units)-1):
+            modules += [
+                nn.Sequential(
+                nn.Linear(hidden_units[i],  hidden_units[i+1]), 
+                nn.ReLU(),
+                nn.Dropout(dropouts[i])
+            )]
+        self.decoder = nn.ModuleList(modules)
+        
+        
+#         self.decoder = nn.Sequential(
+#             nn.Linear(latent_dims, hidden_units), nn.ReLU(),
+#             nn.Linear(hidden_units,  hidden_units), nn.ReLU(),
+#             nn.Linear(hidden_units,  hidden_units), nn.ReLU(),
+#             nn.Linear(hidden_units,  hidden_units), nn.ReLU(),
+#             nn.Linear(hidden_units, in_vals))
+        
+    def encode(self, x):
+        res = x
+        for mod in self.encoder:
+            res = mod(res)
+#         res = self.encoder(x)
+        mu = self.fc_mu(res)
+        log_var = self.fc_var(res)
+        return [mu, log_var]
+
+    def decode(self, z):
+        out = self.decoder_input(z)
+        for mod in self.decoder:
+            out = mod(out)
+#         out = self.decoder(z) # this is more complex if it's a cnn. The example uses an adapter layer
+        return(out)
+
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        return eps * std + mu
+
+    def forward(self, x, **kwargs):
+        mu, log_var = self.encode(x)
+        z = self.reparameterize(mu, log_var)
+        return [self.decode(z), x, mu, log_var]
+
+    def loss_function(self, *args, **kwargs):
+        recons = args[0]
+        x = args[1]
+        mu = args[2]
+        log_var = args[3]
+
+        kld_weight = kwargs['M_N'] # Account for the minibatch samples from the dataset
+
+        recons_loss =F.mse_loss(recons, x)
+        kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
+
+        loss = recons_loss + kld_weight * kld_loss
+#         print(loss, recons_loss.detach(), -kld_loss.detach())
+    #         return {'loss': loss, 'Reconstruction_Loss':recons_loss.detach(), 'KLD':-kld_loss.detach()}
+        return loss
+    
+#         def sample(self, num_samples, current_device, **kwargs):
+#             z = torch.randn(num_samples, self.latent_dim)
+#             z = z.to(current_device)
+#             samples = self.decode(z)
+#             return samples
+        
+#         def generate(self, x):
+#             return self.forward(x)[0]      
+```
+
+```{python}
+# it's possible to get this to train on as few as 2 latent dims but that doesn't seem necessary
+vae = BaseVAE(
+    in_vals = 23, 
+    hidden_units = [16, 16, 16, 16],
+    dropouts    = [0.1, 0.1, 0.1, 0.1],
+    latent_dims = 8, 
+).to(device)
+
+# vae(next(iter(training_dataloader))[0])
+```
+
+```{python}
+train_vae_temp(
+    vae = vae,
+    data = training_dataloader,
+    epochs=5000,
+    verbose = False
+)
+```
+
+```{python}
+# Xin = next(iter(training_dataloader))[0]
+Xin = torch.from_numpy(SMat).to(torch.float32).to(device)
+Xin
+```
+
+```{python}
+with torch.no_grad():
+    Xin_hat = vae(Xin)[0]
+```
+
+```{python}
+px.imshow(Xin.cpu()[0:20, :])
+```
+
+```{python}
+px.imshow(Xin_hat.cpu().detach().numpy()[0:20, :])
+```
+
+```{python}
+px.imshow(Xin_hat.cpu().detach().numpy())
+```
+
+```{python}
+# difference map
+
+px.imshow(
+    (Xin_hat.cpu().detach().numpy() - Xin.cpu().numpy())
+)
+```
+
+### VAE Weather 
+
+```{python}
+# TODO pretraining data
+```
+
+```{python}
+training_dataloader = DataLoader(
+    BigDataset(
+        lookup_obs = np.unique(obs_geno_lookup[:, 2]), 
+        lookup_env = obs_env_lookup,
+        P = torch.from_numpy(PlantHarvest),
+        W = torch.from_numpy(WMat),
+        W_type = 'raw',
+          )   ,
+    batch_size = 50,
+    shuffle = True
+)
+
+[e.shape for e in next(iter(training_dataloader))]
+```
+
+```{python}
+# the issue is not due to nans in the dataset...
+# True in [True in torch.isnan(e[0]) for e in iter(training_dataloader)]
+```
+
+```{python}
+# KL divergence is important because we can't take the gradient of a sampling operation.
+# penalizing KL is a way to force latent vectors towards each other (you can't get 
+# good performanc just by putting each class far away from each other)
+
+# have to cget samples (so we need mu and sigma) and have to track KL divergence
+
+class VariationalEncoder(nn.Module):
+    def __init__(self, latent_dims, in_vals = 3*75419, hidden_units = 1024):
+        super(VariationalEncoder, self).__init__()
+        self.linear1 = nn.Linear(in_vals,hidden_units)
+        self.linear2 = nn.Linear(hidden_units, latent_dims)
+        self.linear3 = nn.Linear(hidden_units, latent_dims)
+
+        self.N = torch.distributions.Normal(0, 1)
+        self.N.loc = self.N.loc.cuda() # hack to get sampling on the GPU
+        self.N.scale = self.N.scale.cuda()
+        self.kl = 0
+
+    def forward(self, x):
+        x     = torch.flatten(x, start_dim=1)
+        x     = F.relu(self.linear1(x))
+        
+        mu    = self.linear2(x)
+        sigma = torch.exp(self.linear3(x))
+        
+        z = mu + sigma*self.N.sample(mu.shape)
+        self.kl = (sigma**2 + mu**2 - torch.log(sigma) - 1/2).sum()
+        return z
+```
+
+```{python}
+# ve = VariationalEncoder(latent_dims= 1).to(device)
+# ve(next(iter(training_dataloader))[0].to(device).to(torch.float) )
+```
+
+```{python}
+class Decoder(nn.Module):
+    def __init__(self, latent_dims, out_vals = 3*75419, out_shape = (-1, 3, 75419), hidden_units = 1024):
+        super(Decoder, self).__init__()
+        self.linear1 = nn.Linear(latent_dims, hidden_units)
+        self.linear2 = nn.Linear(hidden_units, out_vals)
+        self.out_shape = out_shape
+
+    def forward(self, z):
+        z = F.relu(self.linear1(z))
+        z = torch.sigmoid(self.linear2(z))
+        return z.reshape(self.out_shape)
+```
+
+```{python}
+# vd = Decoder(1,).to(device)
+
+# vd(
+#     ve(
+#         next(iter(training_dataloader))[0].to(device).to(torch.float) 
+#     ) 
+# )
+```
+
+```{python}
+class VariationalAutoencoder(nn.Module):
+    def __init__(self, latent_dims, in_vals, out_shape, hidden_units):
+        super(VariationalAutoencoder, self).__init__()
+        self.encoder = VariationalEncoder(latent_dims, in_vals, hidden_units)
+        self.decoder = Decoder(latent_dims, in_vals, out_shape, hidden_units)
+
+    def forward(self, x):
+        z = self.encoder(x)
+        return self.decoder(z)
+```
+
+```{python}
+# vae = VariationalAutoencoder(1).to(device)
+# vae(
+#     next(iter(training_dataloader))[0].to(device).to(torch.float) 
+# ) 
+```
+
+```{python}
+# autoencoder = VariationalAutoencoder(512).to(device)
+# data = training_dataloader
+# epochs = 2
+
+def train(autoencoder, data, epochs=20):
+    opt = torch.optim.AdamW(autoencoder.parameters())
+    for epoch in tqdm(range(epochs)):
+        for x_list in data:
+            x = x_list[0]
+            x = x.to(device).type(torch.float)
+            opt.zero_grad()
+            x_hat = autoencoder(x)
+            loss = ((x - x_hat)**2).sum() + autoencoder.encoder.kl
+            loss.backward()
+            opt.step()
+            if loss == torch.inf:
+                print('Loss is inf')
+                break
+            if loss == torch.nan:
+                print('Loss is nan')
+                break
+#             print(loss)
+    return autoencoder
+```
+
+```{python}
+# loss is blowing up 
+
+training_dataloader = DataLoader(
+    BigDataset(
+    lookup_obs = np.unique(obs_geno_lookup[:, 2]), 
+    lookup_geno = obs_geno_lookup,
+    G = torch.concatenate([torch.from_numpy(e) for e in ACGT_gene_slice_list], axis = 2)[:, :, 0:1024],
+    G_type = 'raw',                
+          )   ,
+    batch_size = 50,
+    shuffle = True
+)
+
+vae_untrained = VariationalAutoencoder(
+    latent_dims = 512, 
+    in_vals = 3*1024, 
+    out_shape = (-1, 3, 1024), 
+    hidden_units = 1024
+).to(device)
+
+vae_trained = train(
+    autoencoder = vae_untrained,
+    data = training_dataloader,
+    epochs = 200)
+```
+
+```{python}
+def get_latents(autoencoder, data):
+    x_hats = []
+    with torch.no_grad():
+        for i, x_list in enumerate(data):
+            x = x_list[0]
+            x = x.to(device).type(torch.float)
+            x_hat = autoencoder.encoder(x)
+            x_hats += [x_hat]
+    x_hats = torch.concat(x_hats)
+    return x_hats
+```
+
+```{python}
+# get_latents(
+#     autoencoder = vae_untrained,
+#     data = training_dataloader)
+```
+
+```{python}
+# get_latents(
+#     autoencoder = vae_trained,
+#     data = training_dataloader)
+```
+
+```{python}
+# torch.concatenate([torch.from_numpy(e) for e in ACGT_gene_slice_list], axis = 2)[:, :, 0:1024]
+```
+
+
+
+
+
+
+
+
+
+
+
+
+### VAE Genome 1d
+
+```{python}
+# training_dataloader = DataLoader(
+#     BigDataset(
+#     lookup_obs = np.unique(obs_geno_lookup[:, 2]), 
+#     lookup_geno = obs_geno_lookup,
+# #     G = torch.from_numpy(ACGT),
+# #     G_type = 'raw',
+        
+# #     G = torch.from_numpy(ACGT_hilb),
+# #     G_type = 'hilbert',        
+#     G = torch.concatenate([torch.from_numpy(e) for e in ACGT_gene_slice_list], axis = 2),
+#     G_type = 'raw',                
+#           )   ,
+#     batch_size = 50,
+#     shuffle = True
+# )
+
+# [e.shape for e in next(iter(training_dataloader))]
+```
+
+```{python}
+# the issue is not due to nans in the dataset...
+# True in [True in torch.isnan(e[0]) for e in iter(training_dataloader)]
+```
+
+```{python}
+# KL divergence is important because we can't take the gradient of a sampling operation.
+# penalizing KL is a way to force latent vectors towards each other (you can't get 
+# good performanc just by putting each class far away from each other)
+
+# have to cget samples (so we need mu and sigma) and have to track KL divergence
+
+class VariationalEncoder(nn.Module):
+    def __init__(self, latent_dims, in_vals = 3*75419, hidden_units = 1024):
+        super(VariationalEncoder, self).__init__()
+        self.linear1 = nn.Linear(in_vals,hidden_units)
+        self.linear2 = nn.Linear(hidden_units, latent_dims)
+        self.linear3 = nn.Linear(hidden_units, latent_dims)
+
+        self.N = torch.distributions.Normal(0, 1)
+        self.N.loc = self.N.loc.cuda() # hack to get sampling on the GPU
+        self.N.scale = self.N.scale.cuda()
+        self.kl = 0
+
+    def forward(self, x):
+        x     = torch.flatten(x, start_dim=1)
+        x     = F.relu(self.linear1(x))
+        
+        mu    = self.linear2(x)
+        sigma = torch.exp(self.linear3(x))
+        
+        z = mu + sigma*self.N.sample(mu.shape)
+        self.kl = (sigma**2 + mu**2 - torch.log(sigma) - 1/2).sum()
+        return z
+```
+
+```{python}
+# ve = VariationalEncoder(latent_dims= 1).to(device)
+# ve(next(iter(training_dataloader))[0].to(device).to(torch.float) )
+```
+
+```{python}
+class Decoder(nn.Module):
+    def __init__(self, latent_dims, out_vals = 3*75419, out_shape = (-1, 3, 75419), hidden_units = 1024):
+        super(Decoder, self).__init__()
+        self.linear1 = nn.Linear(latent_dims, hidden_units)
+        self.linear2 = nn.Linear(hidden_units, out_vals)
+        self.out_shape = out_shape
+
+    def forward(self, z):
+        z = F.relu(self.linear1(z))
+        z = torch.sigmoid(self.linear2(z))
+        return z.reshape(self.out_shape)
+```
+
+```{python}
+# vd = Decoder(1,).to(device)
+
+# vd(
+#     ve(
+#         next(iter(training_dataloader))[0].to(device).to(torch.float) 
+#     ) 
+# )
+```
+
+```{python}
+class VariationalAutoencoder(nn.Module):
+    def __init__(self, latent_dims, in_vals, out_shape, hidden_units):
+        super(VariationalAutoencoder, self).__init__()
+        self.encoder = VariationalEncoder(latent_dims, in_vals, hidden_units)
+        self.decoder = Decoder(latent_dims, in_vals, out_shape, hidden_units)
+
+    def forward(self, x):
+        z = self.encoder(x)
+        return self.decoder(z)
+```
+
+```{python}
+# vae = VariationalAutoencoder(1).to(device)
+# vae(
+#     next(iter(training_dataloader))[0].to(device).to(torch.float) 
+# ) 
+```
+
+```{python}
+# autoencoder = VariationalAutoencoder(512).to(device)
+# data = training_dataloader
+# epochs = 2
+
+def train(autoencoder, data, epochs=20):
+    opt = torch.optim.AdamW(autoencoder.parameters())
+    for epoch in tqdm(range(epochs)):
+        for x_list in data:
+            x = x_list[0]
+            x = x.to(device).type(torch.float)
+            opt.zero_grad()
+            x_hat = autoencoder(x)
+            loss = ((x - x_hat)**2).sum() + autoencoder.encoder.kl
+            loss.backward()
+            opt.step()
+            if loss == torch.inf:
+                print('Loss is inf')
+                break
+            if loss == torch.nan:
+                print('Loss is nan')
+                break
+#             print(loss)
+    return autoencoder
+```
+
+```{python}
+# loss is blowing up 
+
+training_dataloader = DataLoader(
+    BigDataset(
+    lookup_obs = np.unique(obs_geno_lookup[:, 2]), 
+    lookup_geno = obs_geno_lookup,
+    G = torch.concatenate([torch.from_numpy(e) for e in ACGT_gene_slice_list], axis = 2)[:, :, 0:1024],
+    G_type = 'raw',                
+          )   ,
+    batch_size = 50,
+    shuffle = True
+)
+
+vae_untrained = VariationalAutoencoder(
+    latent_dims = 512, 
+    in_vals = 3*1024, 
+    out_shape = (-1, 3, 1024), 
+    hidden_units = 1024
+).to(device)
+
+vae_trained = train(
+    autoencoder = vae_untrained,
+    data = training_dataloader,
+    epochs = 200)
+```
+
+```{python}
+def get_latents(autoencoder, data):
+    x_hats = []
+    with torch.no_grad():
+        for i, x_list in enumerate(data):
+            x = x_list[0]
+            x = x.to(device).type(torch.float)
+            x_hat = autoencoder.encoder(x)
+            x_hats += [x_hat]
+    x_hats = torch.concat(x_hats)
+    return x_hats
+```
+
+```{python}
+get_latents(
+    autoencoder = vae_untrained,
+    data = training_dataloader)
+```
+
+```{python}
+get_latents(
+    autoencoder = vae_trained,
+    data = training_dataloader)
+```
+
+```{python}
+torch.concatenate([torch.from_numpy(e) for e in ACGT_gene_slice_list], axis = 2)[:, :, 0:1024]
+```
+
+### VAE Genome 2d
+
+## Observation Sets
+
+```{python}
+## Create train/test validate indicies from json
+load_from = '../nbs_artifacts/01.06_g2fc_cluster_genotypes/'
+
+split_info = read_split_info(
+    load_from = '../nbs_artifacts/01.06_g2fc_cluster_genotypes/',
+    json_prefix = '2023:9:5:12:8:26')
+
+temp = phno.copy()
+temp[['Female', 'Male']] = temp['Hybrid'].str.split('/', expand = True)
+
+test_dict = find_idxs_split_dict(
+    obs_df = temp, 
+    split_dict = split_info['test'][0]
+)
+# test_dict
+
+# since this is applying predefined model structure no need for validation.
+# This is included for my future reference when validation is needed.
+temp = temp.loc[test_dict['train_idx'], ] # restrict before re-aplying
+obs_df_ref = temp.copy()
+
+val_dict = find_idxs_split_dict(
+    obs_df = obs_df_ref, 
+    split_dict = split_info['validate'][0]
+)
+# val_dict
+
+# test_dict
+
+train_idx = test_dict['train_idx']
+test_idx  = test_dict['test_idx']
+```
+
+```{python}
+
+```
+
+```{python}
+# split_info.keys()
+# split_info['validate_files']#.keys()
+# split_info['validate'][0].keys()
+# val_dict
+```
+
+## One Hot Encoded
+
+```{python}
+# confirm all observation idxs are have genomic information
+# assert [] == [e for e in list(train_idx)+list(test_idx) if e not in obs_geno_lookup[:, 0]]
+```
+
+```{python}
+YMat_cs = calc_cs(YMat[train_idx])
+y_cs = apply_cs(YMat, YMat_cs)
+```
+
+
+```{python}
+# Debugging Data -----------------------------------------------------------------------------------
+# FIXME
+# train_idx = train_idx[0:100]
+# test_idx = test_idx[0:100]
+# FIXME
+train_idx = val_dict['train_idx'][0:100]
+test_idx  = val_dict['test_idx'][0:100]
+
+training_dataloader = DataLoader(
+    ACGTDataset(y = torch.from_numpy(y_cs[train_idx])[:, None].to(torch.float), 
+                G = torch.from_numpy(ACGT).to(torch.float), 
+                idx_original = torch.from_numpy(np.array(train_idx)),
+                idx_lookup   = torch.from_numpy(np.asarray(obs_geno_lookup)),
+                use_gpu_num = 0,
+                device = 'cuda'
+               ),
+    batch_size = 50,
+    shuffle = True
+)
+
+testing_dataloader = DataLoader(
+    ACGTDataset(y = torch.from_numpy(y_cs[test_idx])[:, None].to(torch.float), 
+                G = torch.from_numpy(ACGT).to(torch.float), 
+                idx_original = torch.from_numpy(np.array(test_idx)),
+                idx_lookup   = torch.from_numpy(np.asarray(obs_geno_lookup)),
+                use_gpu_num = 0,
+                device = 'cuda'
+               ),
+    batch_size = 50,
+    shuffle = True
+)
+```
+
+## Tune with `ax`
+
+```{python}
+# needs to be able to take a dictionary with the parameters that can be varied.
+
+# must subclass train_nn to make changes to the optimizer
+```
+
+```{python}
+ np.linspace(2, 32, 12)
+```
+
+```{python}
+# xs = [i for i in np.linspace(1, 32, 10)]
+# ys = [round(e**2) for e in xs]
+# px.scatter(
+#     pd.DataFrame({'x': xs, 'y': ys}),
+#     x ='x', y= 'y')
+
+# [int(2**i) for i in np.linspace(1, 10, 10)]
+
+[round(i**2) for i in np.linspace(1, 32, 10)]
+```
+
+```{python}
+num_layer_blocks = [1]+[2*(1+i) for i in range(6)]
+in_size_int = 4*125891
+out_size_choice = [2**(4+i) for i in range(7)] #16 <-> 1024
+drop_pr_choice = [(5*e)/100 for e in range(11)] # 0 <-> 50
+epoch_choice = [2, 1024]
+
+# See https://github.com/facebook/Ax/issues/1454#issuecomment-1462417398
+
+# num_layer_blocks = [1, 2]
+# in_size_int
+# out_size_choice = [16, 32]
+# drop_pr_choice = [0.0, 0.3]
+# epoch_choice
+
+params = [
+    {
+        "name": "num_layers",
+        "type": "choice",
+        "is_ordered": True, 
+        "values": num_layer_blocks,
+        "dependents": {
+            num_layers: [
+                f"in_{  i + 1}_of_{num_layers}" for i in range(num_layers) if i == 0]+[
+                f"out_{ i + 1}_of_{num_layers}" for i in range(num_layers)]+[
+                f"drop_{i + 1}_of_{num_layers}" for i in range(num_layers)]+[
+                f"epoch_of_{num_layers}" for i in range(num_layers) if i == 0
+            ] for num_layers in num_layer_blocks
+        }
+    },
+    *[  # * here puts the entries of the list comprehension into the outer list instead of keeping them as a sub-list
+        {
+            "name": f"in_{ i + 1}_of_{num_layers}",
+            "type": "fixed",
+            "value_type": 'int',
+            "value": in_size_int
+        } for num_layers in num_layer_blocks for i in range(num_layers) if i == 0
+        
+    ],
+    *[
+        {
+            "name": f"out_{ i + 1}_of_{num_layers}",
+            "type": "choice",
+            "is_ordered": True, 
+            "value_type": 'int',
+            "values": out_size_choice
+        } for num_layers in num_layer_blocks for i in range(num_layers) 
+        
+    ],
+    *[
+        {
+            "name": f"drop_{ i + 1}_of_{num_layers}",
+            "type": "choice",
+            "is_ordered": True, 
+            "value_type": 'float',
+            "values": drop_pr_choice
+        } for num_layers in num_layer_blocks for i in range(num_layers) 
+        
+    ],
+    *[
+        {
+            "name": f"epoch_of_{num_layers}",
+            "type": "range",
+#             "is_ordered": True, 
+            "value_type": 'int',
+            "bounds": epoch_choice
+        } for num_layers in num_layer_blocks 
+        
+    ],
+    
+]
+# params
+```
+
+```{python}
+# Initialize
+ax_client = AxClient()
+
+# Using SAASBO per https://github.com/facebook/Ax/issues/1454#issuecomment-1462417398
+# Create an experiment with required arguments: name, parameters, and objective_name.
+ax_client.create_experiment(
+    name="tune_fcn_layer_number",  # The name of the experiment.
+    parameters=params,
+    objectives={"rmse": ObjectiveProperties(minimize=True)},  # The objective name and minimization setting.
+    # parameter_constraints: Optional, a list of strings of form "p1 >= p2" or "p1 + p2 <= some_bound".
+    # outcome_constraints: Optional, a list of strings of form "constrained_metric <= some_bound".
+    choose_generation_strategy_kwargs={"use_saasbo": True}
+)
+```
+
+```{python}
+# if there already is a set of test results, then load it.
+if os.path.exists(cache_path+'ax_client.pkl'):
+    ax_client = None
+    with open(cache_path+'ax_client.pkl', 'rb') as f:
+        dat = pkl.load(f)
+    ax_client = dat
+```
+
+
+
+```{python}
+class NeuralNetwork(nn.Module):
+    def __init__(self, parameterization):
+        super(NeuralNetwork, self).__init__()    
+
+        class Linear_block(nn.Module):
+            def __init__(self, in_size, out_size, drop_pr):
+                super(Linear_block, self).__init__()
+                self.squish = nn.Linear(in_size, out_size)
+                self.block1 = nn.Sequential(
+                    nn.Linear(out_size, out_size),
+                    nn.ReLU(),
+                    nn.Dropout(drop_pr)
+                )
+                self.block2 = nn.Sequential(
+                    nn.Linear(out_size, out_size),
+                    nn.ReLU(),
+                    nn.Dropout(drop_pr)
+                )
+            def forward(self, x):
+                squish_residual = self.squish(x)
+                out = self.block1(squish_residual)
+                out = self.block2(out)
+                out += squish_residual
+                return out  
+        
+        module_list = []
+
+        max_layer = parameterization['num_layers']
+        for i in range(max_layer):
+            if i  == 0:
+                name_in = f"in_{i+1}_of_{max_layer}"
+            else:
+                name_in = f"out_{i}_of_{max_layer}"
+            name_out = f"out_{i+1}_of_{max_layer}"
+            name_drop= f"drop_{i+1}_of_{max_layer}"
+
+            if i == 0:
+                module_list += [nn.Flatten()]
+
+            module_list += [
+                    Linear_block(
+                        in_size  = parameterization[name_in], 
+                        out_size = parameterization[name_out], 
+                        drop_pr  = parameterization[name_drop])]
+
+            if (i+1) == max_layer:
+                module_list += [nn.Linear(parameterization[name_out], 1)]
+                
+        self.x_network = nn.ModuleList(module_list)
+        
+    def forward(self, x):
+        
+        for mod in self.x_network:
+            x = mod(x)
+            
+        return x
+
+# model = NeuralNetwork(
+#     parameterization = parameterization).to(device)
+
+# model(next(iter(training_dataloader))[0][0:5])
+```
+
+```{python}
+# Get the parameters and run the trial 
+# baseline_parameters = ax_client.get_trial_parameters(trial_index=0)
+# ax_client.complete_trial(trial_index=0, raw_data=train_evaluate(baseline_parameters))
+```
+
+```{python}
+def train_evaluate(parameterization, use_validation_sets = 1):
+    dataloader_batch_size = 50
+    # run_epochs = 2
+
+    loss_list = []    
+    for validate_i in list(np.random.choice(
+        [i for i in range(len(split_info['validate']))], 
+        use_validation_sets, 
+        replace = False)):
+        print(f"Running with validation set: {validate_i}")
+
+        val_dict = find_idxs_split_dict(
+            obs_df = obs_df_ref, 
+            split_dict = split_info['validate'][validate_i]
+        )
+
+        train_idx = val_dict['train_idx']
+        test_idx  = val_dict['test_idx']
+        
+        #FIXME
+        train_idx = train_idx[0:50]
+        test_idx = test_idx[0:50]
+        
+
+        training_dataloader = DataLoader(
+            ACGTDataset(y = torch.from_numpy(y_cs[train_idx])[:, None].to(torch.float), 
+                        G = torch.from_numpy(ACGT).to(torch.float), 
+                        idx_original = torch.from_numpy(np.array(train_idx)),
+                        idx_lookup   = torch.from_numpy(np.asarray(obs_geno_lookup)),
+                        use_gpu_num = 0,
+                        device = 'cuda'
+                       ),
+            batch_size = 50,
+            shuffle = True
+        )
+
+        testing_dataloader = DataLoader(
+            ACGTDataset(y = torch.from_numpy(y_cs[test_idx])[:, None].to(torch.float), 
+                        G = torch.from_numpy(ACGT).to(torch.float), 
+                        idx_original = torch.from_numpy(np.array(test_idx)),
+                        idx_lookup   = torch.from_numpy(np.asarray(obs_geno_lookup)),
+                        use_gpu_num = 0,
+                        device = 'cuda'
+                       ),
+            batch_size = 50,
+            shuffle = True
+        )
+
+        model = NeuralNetwork(parameterization = parameterization)    
+        model.to(device)    
+        model, loss_df = train_nn(
+            cache_path,
+            training_dataloader,
+            testing_dataloader,
+            model,
+            learning_rate = 1e-3,
+            batch_size = dataloader_batch_size,
+            epochs = parameterization[f"epoch_of_{parameterization['num_layers']}"]
+        )
+        loss_list += [list(loss_df['TestMSE'])[-1]]
+    
+    mean_loss = (sum(loss_list)/len(loss_list))
+    print((mean_loss, loss_list))
+    return(mean_loss)
+```
+
+```{python}
+# train_evaluate(parameterization)
+```
+
+```{python}
+for i in range(10):
+    parameters, trial_index = ax_client.get_next_trial()
+    # Local evaluation here can be replaced with deployment to external system.
+    ax_client.complete_trial(trial_index=trial_index, 
+                             raw_data=train_evaluate(parameters))
+    
+    # Ax has built in functions to save client state to JSON or to a database. The builtins 
+    # (save_to_json_file, load_from_json_file) fail, seemingly from having a nested search space. 
+    # No debugging information found on Stackoverflow or google so I'm using this work around. 
+    # Warning on running ax_client.complete_trial
+    #     UserWarning:
+    # Cannot flatten observation features ObservationFeatures(parameters={}, trial_index=0) as full parameterization is not recorded in metadata.
+    
+    with open(cache_path+'ax_client.pkl', 'wb') as f:
+        pkl.dump(ax_client, f)
+```
+
+```{python}
+ax_client.get_trials_data_frame()
+```
+
+```{python}
+best_parameters, values = ax_client.get_best_parameters()
+best_parameters
+```
+
+```{python}
+mean, covariance = values
+mean
+```
+
+```{python}
+# render(ax_client.get_contour_plot(param_x="drop_1_of_2", 
+#                                   param_y="drop_2_of_2", 
+#                                   metric_name="rmse"))
+```
+
+
+
+```{python}
+# ax_client.save_to_json_file(filepath = cache_path+'ax_client.json') 
+```
+
+```{python}
+# restored_ax_client = (
+#     AxClient.load_from_json_file(filepath = cache_path+'ax_client.json') 
+# )
+```
+
+
+
+## Train Finalized Model
+
+```{python}
+# dataloader_batch_size = 50
+# run_epochs = 2#100
+
+# # don't run if either of these exist because there may be cases where we want the results but not the model
+# import re
+
+# if not os.path.exists(cache_path+'/model.pt'): 
+#     # Shared setup (train from scratch and load latest)
+#     model = NeuralNetwork()
+
+#     # find the biggest model to save
+#     saved_models = os.listdir(cache_path)
+#     saved_models = [e for e in saved_models if re.match('model*', e)]
+
+#     if saved_models == []:
+#         epochs_run = 0
+#     else:
+#         saved_models = [e for e in saved_models if e != 'model.pt']
+#         # if there are saved models reload and resume training
+#         saved_models_numbers = [int(e.replace('model_', ''
+#                                     ).replace('.pt', ''
+#                                     ).split('_')[0]) for e in saved_models]
+#         # saved_models
+#         epochs_run = max(saved_models_numbers)+1 # add 1 to account for 0 index
+#         latest_model = [e for e in saved_models if re.match(
+#             '^model_'+str(epochs_run-1)+'_.*\.pt$', e)][0] # subtract 1 to convert back
+#         model.load_state_dict(torch.load(cache_path+latest_model))
+#         print('Resuming Training: '+str(epochs_run)+'/'+str(run_epochs)+' epochs run.')
+    
+#     model.to(device)    
+
+#     model, loss_df = train_nn(
+#         cache_path,
+#         training_dataloader,
+#         testing_dataloader,
+#         model,
+#         learning_rate = 1e-3,
+#         batch_size = dataloader_batch_size,
+#         epochs = (run_epochs - epochs_run)
+#     )
+    
+#     # experimental outputs:
+#     # 1. Model
+#     torch.save(model.state_dict(), cache_path+'/model.pt') # convention is to use .pt or .pth
+
+#     # 2. loss_df    
+#     # If this is resuming training, load and extend the existing loss dataframe
+#     if os.path.exists(cache_path+'/loss_df.csv'):
+#         loss_df_on_disk = pd.read_csv(cache_path+'/loss_df.csv')
+#         epoch_offset = 1 + loss_df_on_disk['Epoch'].max()
+#         loss_df['Epoch'] = loss_df['Epoch'] + epoch_offset
+#         loss_df = pd.concat([loss_df_on_disk, loss_df])
+#     loss_df.to_csv(cache_path+'/loss_df.csv', index=False)  
+    
+#     # 3. predictions 
+#     yhats = pd.concat([
+#         yhat_loop(testing_dataloader, model).assign(Split = 'Test'),
+#         yhat_loop(training_dataloader, model).assign(Split = 'Train')], axis = 0)
+
+#     yhats.to_csv(cache_path+'/yhats.csv', index=False)
+```
+
+
+### Standard Visualizations
+
+
+
+
+```{python}
+scale_dict = {'y1':YMat_cs}
+import plotly.graph_objects as go
+```
+
+```{python}
+naieve_yhat = training_dataloader.dataset.y.mean()
+
+naieve_MSE_Train = reverse_cs( 
+    np.array(((naieve_yhat - training_dataloader.dataset.y)**2)).mean(),
+    scale_dict['y1']
+)
+
+naieve_MSE_Test = reverse_cs( 
+    np.array(((naieve_yhat - testing_dataloader.dataset.y)**2)).mean(),
+    scale_dict['y1']
+)
+
+naieve_MSE_Train, naieve_MSE_Test
+
+
+
+loss_df = pd.read_csv(cache_path+'/loss_df.csv')
+
+loss_df.TrainMSE = reverse_cs(loss_df.TrainMSE, scale_dict['y1'])
+loss_df.TestMSE  = reverse_cs(loss_df.TestMSE , scale_dict['y1'])
+
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=loss_df.Epoch, y=loss_df.TestMSE,
+                    mode='lines', name='Test'))
+fig.add_trace(go.Scatter(x=loss_df.Epoch, y=loss_df.TrainMSE,
+                    mode='lines', name='Train'))
+
+fig.add_trace(go.Scatter(x=loss_df.Epoch, y=[naieve_MSE_Test  for e in range(len(loss_df.Epoch))], 
+                         mode='lines', name='Naieve Test'))
+fig.add_trace(go.Scatter(x=loss_df.Epoch, y=[naieve_MSE_Train for e in range(len(loss_df.Epoch))], 
+                         mode='lines', name='Naieve Train'))
+fig.show()
+```
+
+```{python}
+yhats = pd.read_csv(cache_path+'/yhats.csv')
+
+# px.scatter(yhats, x = 'y_true', y = 'y_pred', color = 'Split')
+```
+
+```{python}
+yhats.y_true = reverse_cs(yhats.y_true, scale_dict['y1'])
+yhats.y_pred = reverse_cs(yhats.y_pred, scale_dict['y1'])
+
+# px.scatter(yhats, x = 'y_true', y = 'y_pred', color = 'Split', trendline="ols")
+```
+
+```{python}
+yhats['Error'] = yhats.y_pred - yhats.y_true
+
+px.histogram(yhats, x = 'Error', color = 'Split',
+             marginal="box", # can be `rug`, `violin`
+             nbins= 50)
+```
+
+```{python}
+# os._exit(00)
+```
+
