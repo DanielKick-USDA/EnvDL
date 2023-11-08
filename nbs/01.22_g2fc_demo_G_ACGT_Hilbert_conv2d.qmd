@@ -340,6 +340,43 @@ if not os.path.exists(cache_path+'/model.pt'):
 
 ### Standard Visualizations
 
+```{python}
+import plotly.graph_objects as go
+
+# naieve_yhat = training_dataloader.dataset.y.mean()
+
+# naieve_MSE_Train = reverse_cs( 
+#     np.array(((naieve_yhat - training_dataloader.dataset.y)**2)).mean(),
+#     scale_dict['y1']
+# )
+
+# naieve_MSE_Test = reverse_cs( 
+#     np.array(((naieve_yhat - testing_dataloader.dataset.y)**2)).mean(),
+#     scale_dict['y1']
+# )
+
+# naieve_MSE_Train, naieve_MSE_Test
+
+
+
+loss_df = pd.read_csv(cache_path+'/loss_df.csv')
+
+# loss_df.TrainMSE = reverse_cs(loss_df.TrainMSE, scale_dict['y1'])
+# loss_df.TestMSE  = reverse_cs(loss_df.TestMSE , scale_dict['y1'])
+
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=loss_df.Epoch, y=loss_df.TestMSE,
+                    mode='lines', name='Test'))
+fig.add_trace(go.Scatter(x=loss_df.Epoch, y=loss_df.TrainMSE,
+                    mode='lines', name='Train'))
+
+# fig.add_trace(go.Scatter(x=loss_df.Epoch, y=[naieve_MSE_Test  for e in range(len(loss_df.Epoch))], 
+#                          mode='lines', name='Naieve Test'))
+# fig.add_trace(go.Scatter(x=loss_df.Epoch, y=[naieve_MSE_Train for e in range(len(loss_df.Epoch))], 
+#                          mode='lines', name='Naieve Train'))
+fig.show()
+```
 
 
 
