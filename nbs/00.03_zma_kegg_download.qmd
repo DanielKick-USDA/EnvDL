@@ -1,0 +1,838 @@
+---
+title: 'SNPS to Networks 1: KEGG'
+jupyter: python3
+---
+
+
+> Downloading *Zea mays* data from the KEGG database.
+
+
+```{python}
+#| '0': d
+#| '1': e
+#| '2': f
+#| '3': a
+#| '4': u
+#| '5': l
+#| '6': t
+#| '7': _
+#| '8': e
+#| '9': x
+#| '10': p
+#| '11': ' '
+#| '12': k
+#| '13': e
+#| '14': g
+#| '15': g
+```
+
+```{python}
+#| '0': h
+#| '1': i
+#| '2': d
+#| '3': e
+# from nbdev.showdoc import *
+```
+
+```{python}
+import os
+import tqdm
+from tqdm import tqdm
+import re
+import time
+import sys
+import requests
+import numpy as np
+import pandas as pd
+import plotly.express as px
+
+# import pickle5 as pkl
+import pickle as pkl
+
+from EnvDL.core import *
+```
+
+## Helpful Custom Functions
+
+```{python}
+# migrated to core
+# #| export
+
+# "Iteratively check for and create directories to store output. Ideally this would just be os.mkdirs() but that function is not available in this version of python"
+# def ensure_dir_path_exists(dir_path = '../data_ext'):
+#     import os
+    
+#     for i in range(2, len(dir_path.split('/'))+1):
+#         path_part = '/'.join(dir_path.split('/')[0:i])
+#         if not os.path.exists(path_part):
+#             os.mkdir(path_part)
+        
+```
+
+```{python}
+# migrated to core
+
+# #| export
+
+# "Retrieve a previously calculated result. Return None if it cannot be found."
+# def get_cached_result(
+#     save_path
+# ):
+#     import os
+#     import pickle as pkl
+# #     import pickle5 as pkl # Using non-base version of pickle 
+# #                           # conda env with gpu support for tf and torch uses python 3.7.
+# #                           # Python 3.7 doesn't contain pickle v 5
+#     if not os.path.exists(save_path):
+#         cached_result = None
+#     else:
+#         with open(save_path, 'rb') as handle:
+#                 cached_result = pkl.load(handle)
+#     return(cached_result)
+```
+
+```{python}
+# migrated to core
+
+# #| export
+
+# def put_cached_result(
+#     save_path,
+#     save_obj
+# ):
+#     import pickle as pkl
+# #     import pickle5 as pkl
+#     from dlgwas.kegg import ensure_dir_path_exists
+#     ensure_dir_path_exists(dir_path= '/'.join(save_path.split('/')[:-1]) )
+    
+#     with open(save_path, 'wb') as handle:
+#             pkl.dump(save_obj, 
+#                      handle, 
+#                      protocol=4 # version 4 is used instead of 5 because the container
+#                                 # I'm using with tf and torch uses python 3.7 and version
+#                                 # 5 is introduced in 3.8
+#                     )
+```
+
+```{python}
+# # here's a funciton for converting to v4 any objects that are v5. Note that this will need to be run in a different env.
+# def downgrade_pkl_to_4(save_path):
+#     import pickle as pkl
+
+#     with open(save_path, 'rb') as handle:
+#         save_obj = pkl.load(handle)
+
+#     with open(save_path, 'wb') as handle:    
+#         pkl.dump(save_obj, 
+#                  handle, 
+#                  protocol=4)
+```
+
+```{python}
+# # This is the expected boiler plate for using the above functions. 
+
+# save_path = './demofile.txt'
+
+# demo = get_cached_result(save_path=save_path)
+
+# if None == samples_and_matches:
+#     demo = CODE TO MAKE DEMO HERE
+    
+#     put_cached_result(
+#         save_path = save_path,
+#         save_obj = demo
+#     )
+```
+
+
+## Identify genes to be downloaded:
+
+```{python}
+#| '0': e
+#| '1': x
+#| '2': p
+#| '3': o
+#| '4': r
+#| '5': t
+
+# Get all the genes for zea mays
+# Some gene entries that don't start begin with a chromosome number. These included plastid (Pltd) and mitochondria (MT) genes.
+
+def get_kegg_species_list(species = 'zma'):
+    import os
+    import requests
+    # make sure the directory exists to hold these data
+    ensure_dir_path_exists(dir_path = '../data_ext/'+species+'/kegg')
+
+    file_path = '../data_ext/'+species+'/kegg'+'/'+species+'_list.txt'
+    # only retrieve if there isn't a local copy
+    if file_path.split('/')[-1] in os.listdir('/'.join(file_path.split('/')[:-1])):
+        with open(file_path, 'r') as f:
+            r_text = f.read()
+    else:
+        r = requests.get('https://rest.kegg.jp/list/'+species)
+        r_text = r.text
+        with open(file_path, 'a') as f:
+            f.write(r_text)
+    return(r_text)
+```
+
+```{python}
+#| '0': e
+#| '1': x
+#| '2': p
+#| '3': o
+#| '4': r
+#| '5': t
+def mkdf_kegg_species_list(kegg_species_list):
+    import pandas as pd
+    kegg_list_zma = pd.DataFrame([e.split('\t') for e in kegg_species_list.split('\n') ])
+    # clean up names
+    kegg_list_zma = kegg_list_zma.rename(columns = dict(zip(
+        [i for i in range(4)],
+        ['gene', 'seq_type', 'chromosome_positon', 'gene_type']
+    )))
+
+    kegg_list_zma = kegg_list_zma.loc[kegg_list_zma.chromosome_positon.notna(), ]
+    return(kegg_list_zma)
+```
+
+The KEGG list contains a gene id that can be used to download further information. The chromosomal position will be key to match up collected SNPs to genes.
+
+```{python}
+kegg_zma_list = get_kegg_species_list(species = 'zma')
+kegg_list_zma = mkdf_kegg_species_list(kegg_species_list = kegg_zma_list)
+```
+
+There are also entries that don't start with a chromosome number. These are non-nuclear sequences from plastid (Pltd), Mitochondria (MT), etc.
+
+```{python}
+no_chrm = [e for e in kegg_list_zma['chromosome_positon'] if re.match('\D.+', e)]
+no_chrm = list(set(no_chrm))
+kegg_list_zma.loc[kegg_list_zma.chromosome_positon.isin(no_chrm), ]
+```
+
+## Download and cache KEGG entries
+
+```{python}
+#| '0': e
+#| '1': x
+#| '2': p
+#| '3': o
+#| '4': r
+#| '5': t
+
+def download_kegg_gene(kegg_gene = 'zma:103644366', **kwargs):    
+    """
+    Downloads kegg gene entry if it does not exist locally. 
+    Can optionally take a numeric value as `sleep_for` to sleep after downloading a file. 
+    Useful for controlling the rate requests being sent to the API.
+    """
+    species = kegg_gene.split(':')[0]
+    dir_path = '../data_ext/'+species+'/kegg/gene_entries/'
+    ensure_dir_path_exists(dir_path = dir_path)
+    
+    kegg_gene_safename = kegg_gene.replace(':', '_') # name that's safe for file names
+    file_path = dir_path+kegg_gene_safename+'.txt'
+    
+    # only download if the file doesn't already exist
+    if os.path.exists(file_path):
+        pass
+    else:
+        # option to sleep for a given amount of time so tha tthe api isn't accessed to much
+        # sleeping here means that we only sleep if there will be a request to download
+        if 'sleep_for' in kwargs.keys():
+            time.sleep(kwargs['sleep_for'])
+        
+        r = requests.get('https://rest.kegg.jp/get/'+kegg_gene)
+        with open(file_path, 'a') as f:
+            f.write(r.text)
+```
+
+
+```{python}
+#| '0': e
+#| '1': x
+#| '2': p
+#| '3': o
+#| '4': r
+#| '5': t
+def read_kegg_gene(
+    kegg_gene = 'zma:103644366',
+    **kwargs # Intended to allow for explicit 'encoding' to be passed into open the file : encoding="ISO-8859-1"
+    ):  
+    "Reads in locally cached KEGG gene entries. Will download the requested entry if it doesn't exist locally."
+    import os
+    species = kegg_gene.split(':')[0]
+    dir_path = '../data_ext/'+species+'/kegg/gene_entries/'
+    ensure_dir_path_exists(dir_path = dir_path)
+    
+    kegg_gene_safename = kegg_gene.replace(':', '_') # name that's safe for file names
+    file_path = dir_path+kegg_gene_safename+'.txt'
+
+    if not os.path.exists(file_path):
+        download_kegg_gene(kegg_gene)
+    
+    if 'encoding' in kwargs.keys():
+        with open(file_path, encoding  = kwargs['encoding']) as f:
+            r_text = f.read()        
+    else:
+        with open(file_path) as f:
+            r_text = f.read()
+            
+    return(r_text)
+```
+
+Example usage for one gene. Species is inferred and if it doesn't exist in `data_ext` then it will automatically be downloaded with `download_kegg_gene()`.
+
+```{python}
+print(read_kegg_gene(kegg_gene = 'zma:103644366'))
+```
+
+To cache all genes on KEGG for an organism, loop over all entries in the KEGG list for that species.
+
+```{python}
+for kegg_gene in tqdm(kegg_list_zma.gene):
+    try:
+        download_kegg_gene(kegg_gene = kegg_gene, 
+                           sleep_for = np.random.uniform(0.5, 1.5))
+    except:
+        print('Problem with '+kegg_gene) 
+```
+
+## Imported from 02
+
+
+## Load *Zea mays* gene list
+
+```{python}
+# kegg_zma_list = get_kegg_species_list(species = 'zma')
+```
+
+```{python}
+kegg_zma_list = get_kegg_species_list(species = 'zma')
+```
+
+```{python}
+kegg_list_zma = mkdf_kegg_species_list(kegg_species_list = kegg_zma_list)
+```
+
+```{python}
+kegg_list_zma.head()
+```
+
+## Read KEGG gene entries
+
+###  Convert a single file into a dictionary
+The gene files contain sections (ENTRY, NAME, AASEQ, etc.). To aid processing each of these sections will be separated into a key in a dictionary.
+
+```{python}
+kegg_file = 'zma_100125650.txt'
+# convert back to KEGG format
+kegg_gene_name = kegg_file.replace('_', ':').replace('.txt', '')
+
+# convert back to kegg format
+r_text = read_kegg_gene(kegg_gene = kegg_gene_name)
+
+# parsing gene entry
+r_text_list = r_text.split('\n')
+r_text_list[0:5]
+```
+
+```{python}
+# Some files may not contain all sections so this list needs to be created for each file
+section_names = [r_text_list[i][0:12].strip() for i in range(len(r_text_list)) ]
+section_names = [e for e in section_names if e != '']
+
+section_starts = [
+    [i for i in range(len(r_text_list)) if re.match('^'+e, r_text_list[i])][0] 
+    for e in section_names]
+
+section_names, section_starts
+```
+
+```{python}
+# just split each file into text of it's sections
+out = {}
+
+# get lines associated with section
+def _get_section_text(section_name = 'AASEQ'):
+    idx = section_names.index(section_name)
+    section_text = r_text_list[section_starts[idx]:section_starts[idx+1]]
+    # remove leading indent
+    section_text = [e[12:] for e in section_text]
+    return(section_text)
+
+for section_name in section_names:
+    if section_name != '///': # end of file
+        out[section_name] = _get_section_text(section_name = section_name)
+```
+
+```{python}
+out
+```
+
+### Convert all downloaded gene files
+
+```{python}
+def kegg_gene_to_dict(kegg_file = 'zma_100125650.txt',
+                     **kwargs):
+    # convert back to kegg format
+    if 'encoding' in kwargs.keys():
+        r_text = read_kegg_gene(
+            kegg_gene= kegg_file.replace('_', ':').replace('.txt', ''),
+            encoding  = kwargs['encoding']
+        )
+    else:
+        r_text = read_kegg_gene(
+            kegg_gene= kegg_file.replace('_', ':').replace('.txt', '') )
+    
+    # parsing gene entry
+    r_text_list = r_text.split('\n')
+
+    # Some files may not contain all sections so this list needs to be created for each file
+    section_names = [r_text_list[i][0:12].strip() for i in range(len(r_text_list)) ]
+    section_names = [e for e in section_names if e != '']
+
+    section_starts = [
+        [i for i in range(len(r_text_list)) if re.match('^'+e, r_text_list[i])][0] 
+        for e in section_names]
+
+    # just split each file into text of it's sections
+    out = {}
+
+    # get lines associated with section
+    def _get_section_text(section_name = 'AASEQ'):
+        idx = section_names.index(section_name)
+        section_text = r_text_list[section_starts[idx]:section_starts[idx+1]]
+        # remove leading indent
+        section_text = [e[12:] for e in section_text]
+        return(section_text)
+
+    for section_name in section_names:
+        if section_name != '///': # end of file
+            out[section_name] = _get_section_text(section_name = section_name)
+
+    return(out)
+```
+
+```{python}
+save_dir = '../data_ext/zma/kegg/'
+# save_dir = '../data/zma/kegg/'
+save_path = save_dir+'cached_kegg_gene_files.pkl'
+
+ensure_dir_path_exists(dir_path = save_dir)
+```
+
+```{python}
+# 27258 zma_100037738.txt
+
+# kegg_gene_to_dict(
+#             kegg_file = 'zma_100037738.txt',
+# #             encoding="ISO-8859-1"
+#         )
+```
+
+```{python}
+# kegg_gene_files = os.listdir('../data_ext/zma/kegg/gene_entries/')
+
+# lst_out = []
+
+# for i in range(len(kegg_gene_files)):
+#     kegg_gene_file = kegg_gene_files[i]
+#     print(i, kegg_gene_file)
+#     lst_out += [    
+#         kegg_gene_to_dict(
+#             kegg_file = kegg_gene_file,
+#             encoding="ISO-8859-1"
+#         )]
+```
+
+```{python}
+if not os.path.exists(save_path):
+    # This is a pain. I would like to parallelize reading these files in, but since it only has to be done once per species doing so would be premature optimization.
+    # BUT it seems that nbdev is rerunning it as part of the CI workflow. So caching it makes sense. 
+    kegg_gene_files = os.listdir('../data_ext/zma/kegg/gene_entries/')
+#     kegg_gene_entries = [kegg_gene_to_dict(kegg_file = kegg_gene_file) for kegg_gene_file in tqdm.tqdm(kegg_gene_files)]
+    kegg_gene_entries = [kegg_gene_to_dict(
+        kegg_file = kegg_gene_file,
+        encoding="ISO-8859-1"
+    ) for kegg_gene_file in kegg_gene_files]
+    # 37712/37712 [07:12<00:00, 87.23it/s]
+
+    with open(save_path, 'wb') as handle:
+        pkl.dump(kegg_gene_entries, 
+                 handle, 
+                 protocol=pkl.HIGHEST_PROTOCOL)
+else:
+    # Reading in data
+    with open(save_path, 'rb') as handle:
+        kegg_gene_entries = pkl.load(handle)
+```
+
+## Clean up KEGG gene dictionaries
+
+The goal here is to use a finite-state machine to convert the lines for each section into a useful representation. This approach makes extending or altering this code easier.
+
+Starting out I needed to find how many states were featured across all files.
+
+```{python}
+# produce a flat list of keys then deduplicate them
+kegg_gene_sections = [entry for sublist in [list(kegg_gene_entries[i].keys()) for i in range(len(kegg_gene_entries))] 
+                  for entry in sublist] # entry is defined here so without it the list comprehension fails instead of producing the list of sublists
+kegg_gene_sections = list(set(kegg_gene_sections))
+kegg_gene_sections 
+```
+
+To aid in writing the logic for each section, pull several examples as a reference.
+
+```{python}
+# Helper Functions ---------------------------------------------------------------------
+# helper fcn to pull indices and examples of sections
+def get_section_examples(section = 'MOTIF', n = 5):
+    i_section_matches = [i for i in range(len(kegg_gene_entries)) if section in kegg_gene_entries[i].keys()]
+    out = [[i_section_matches[i], 
+            kegg_gene_entries[i_section_matches[i]][section] ] for i in range(n)]
+    return(out)
+```
+
+
+```{python}
+get_section_examples(section = 'SYMBOL', n = 5)
+```
+
+Now create a function to process each section of the file or more precisely, each section type that needs a different treatment. 
+
+```{python}
+# Any non-hierarical list of attributes can go here. It will be transformed into a dict
+def _gene_entry_flat_list(section_entry):
+    # split like so [['NCBI-GeneID', '103644366'], ['NCBI-ProteinID', 'XP_020400304']]
+    # then convert to dict
+    # {'NCBI-GeneID': '103644366', 'NCBI-ProteinID': 'XP_020400304'}
+    section_entry = [e.replace(section_name, '').strip().split(': ') for e in section_entry]
+    section_entry = dict(section_entry)
+    return(section_entry)
+```
+
+```{python}
+# 'AASEQ', 'NTSEQ'
+def _gene_seq_to_dict(seq_list):
+    out = {}
+    out['lenght'] = int(seq_list[0])
+    out['seq'] = ''.join(seq_list[1:])
+    return(out)
+```
+
+The hardest one to think through was the "BRITE". This section contains a tree categorizing the gene's role(s). Here's a sample excerpt:
+```
+KEGG Orthology (KO) [BR:zma00001]
+ 09120 Genetic Information Processing
+  09121 Transcription
+   03020 RNA polymerase
+    100037782
+ 09180 Brite Hierarchies
+  09182 Protein families: genetic information processing
+   03021 Transcription machinery [BR:zma03021]
+    100037782
+# ...
+```
+The goal is to represent these data in a way that can be used to construct a hierarchy for all genes that are in a given sample. Level is defined by leading whitespace. 
+```
+KEGG Orthology (KO) [BR:zma00001]
+├ 09120 Genetic Information Processing
+│ └ 09121 Transcription
+│   └ 03020 RNA polymerase
+│     └ 100037782
+└ 09180 Brite Hierarchies
+  └ 09182 Protein families: genetic information processing
+    └ 03021 Transcription machinery [BR:zma03021]
+      └ 100037782
+```
+Parsing into a dictionary makes sense (and then creating a full hierarchy would be as simple as merging on keys) but building one is tricky to do since you can't pass a list of keys into a dictionary. Instead of reading from the root to the leaf, we work backwards to find the path from leaf to root. This makes finding the right parent easy -- track the indent level and go up one line skipping lines with an indent level >= the current level. These paths have redundant information (shared parents) but represent what is needed.
+
+
+```{python}
+# Figuring out how to process BRITE entries
+kegg_gene_entry = kegg_gene_entries[0]
+section_entry = kegg_gene_entry['BRITE']
+
+section_entry
+```
+
+```{python}
+# get the leading whitespace for each line
+indent_spaces = [re.findall('^ +', e)[0] if re.match('^ ', e) else [''][0] for e in section_entry]
+indent_spaces = [len(e) for e  in indent_spaces]
+
+len(indent_spaces), indent_spaces
+```
+
+Because the lists are ordered, given a position one can start at a leaf and work back up to the root by 
+walking backwards and looking for the next point at which the indent level is the expected level. 
+IF it's true that each of the leaves contain only an identifer number and no letters
+then the process is to
+1. Find all leaves
+1. Walk backwards from all leaves
+1. Add a list of lists with these paths (could be used in a tidy format)
+
+Below the process of building up the path from leaf to root and the indents at each step (as a sanity check) are shown.
+
+```{python}
+i = 4 # position in list
+indent = indent_spaces[i] # indent at that position
+
+j = i
+current_indent = indent
+# work backawards to get the paths
+j_backtrack      = [j]
+indent_backtrack = [current_indent]
+
+while indent_backtrack[-1] > 0:
+    while current_indent != indent_backtrack[-1]-1:
+        j = j-1
+        current_indent = indent_spaces[j]
+
+    j_backtrack.extend([j])
+    indent_backtrack.extend([current_indent])
+
+    # indent
+    print(j_backtrack, indent_backtrack) # 
+```
+
+Wrap this in a function, then integrate into a processing function for BRITE
+
+```{python}
+def _indent_backtrack_path(i, # position in list 
+                           indent_spaces                                        
+                          ):
+    indent = indent_spaces[i] # indent at that position
+    j = i
+    current_indent = indent
+    # work backawards to get the paths
+    j_backtrack      = [j]
+    indent_backtrack = [current_indent]
+
+    while indent_backtrack[-1] > 0:
+        while current_indent != indent_backtrack[-1]-1:
+            j = j-1
+            current_indent = indent_spaces[j]
+
+        j_backtrack.extend([j])
+        indent_backtrack.extend([current_indent])
+        
+    # indent_backtrack is not needed beyond debugging
+    # confirm that the indent only decreases as you walk through the backtrack
+    indent_check = indent_backtrack[1:]+[-1]
+    indent_check =  [True if indent_backtrack[i] > indent_check[i] else False for i in range(len(indent_backtrack))]
+    assert False not in indent_check
+    
+    return(j_backtrack)
+```
+
+```{python}
+def _gene_entry_BRITE(section_entry):
+    # get the leading whitespace for each line
+    indent_spaces = [re.findall('^ +', e)[0] if re.match('^ ', e) else [''][0] for e in section_entry]
+    indent_spaces = [len(e) for e  in indent_spaces]
+
+    # find the leaves
+    # ['KEGG Orthology (KO) [BR:zma00001]',
+    #  ' 09120 Genetic Information Processing',
+    #  '  09121 Transcription',
+    #  '   03020 RNA polymerase',
+    #  '    100037782' <------------- Whitespace followed by digits and no letters
+    leaf_idxs = [i for i in range(len(section_entry)) if re.match('^\s+\d+$', section_entry[i])]
+
+    # for each leaf get the backtrack path to the root
+    leaf_backtraces = [_indent_backtrack_path(i = leaf_idx, 
+                                              indent_spaces = indent_spaces
+                                             ) for leaf_idx in leaf_idxs]
+    # reverse the inner lists
+    [e.reverse()  for e in leaf_backtraces]
+
+    out = [[section_entry[i] for i in leaf_backtraces[j]] for j in range(len(leaf_backtraces))]
+    # sample input
+    # ['KEGG Orthology (KO) [BR:zma00001]',
+    #  ' 09120 Genetic Information Processing',
+    #  '  09121 Transcription',
+    #  '   03020 RNA polymerase',
+    #  '    100037782',
+    #  ' 09180 Brite Hierarchies',
+    #  '  09182 Protein families: genetic information processing',
+    #  '   03021 Transcription machinery [BR:zma03021]',
+    #  '    100037782',
+    #  'Enzymes [BR:zma01000]',
+    #  ' 2. Transferases',
+    #  '  2.7  Transferring phosphorus-containing groups',
+    #  '   2.7.7  Nucleotidyltransferases',
+    #  '    2.7.7.6  DNA-directed RNA polymerase',
+    #  '     100037782',
+    #  'Transcription machinery [BR:zma03021]',
+    #  ' Eukaryotic type',
+    #  '  RNA polymerase II system',
+    #  '   RNA polymerase II',
+    #  '    Pol IV and V specific subunits',
+    #  '     100037782']
+
+    # Sample output
+    # [['KEGG Orthology (KO) [BR:zma00001]',
+    #   ' 09120 Genetic Information Processing',
+    #   '  09121 Transcription',
+    #   '   03020 RNA polymerase',
+    #   '    100037782'],
+    #  ['KEGG Orthology (KO) [BR:zma00001]',
+    #   ' 09180 Brite Hierarchies',
+    #   '  09182 Protein families: genetic information processing',
+    #   '   03021 Transcription machinery [BR:zma03021]',
+    #   '    100037782'],
+    #  ['Enzymes [BR:zma01000]',
+    #   ' 2. Transferases',
+    #   '  2.7  Transferring phosphorus-containing groups',
+    #   '   2.7.7  Nucleotidyltransferases',
+    #   '    2.7.7.6  DNA-directed RNA polymerase',
+    #   '     100037782'],
+    #  ['Transcription machinery [BR:zma03021]',
+    #   ' Eukaryotic type',
+    #   '  RNA polymerase II system',
+    #   '   RNA polymerase II',
+    #   '    Pol IV and V specific subunits',
+    #   '     100037782']]
+
+    # and then strip whitespace
+    out = [[ee.strip() for ee in e] for e in out]
+    return(out)
+```
+
+```{python}
+def parse_kegg_gene_entry(kegg_gene_entry):
+    for section in kegg_gene_entry.keys():
+        if type(kegg_gene_entry[section]) != list :
+            # This is a safeguard to prevent the code from breaking when rerun. All entries start out as list
+            # so if an entry isn't a list then it's already been transformed
+            pass
+
+        else:
+            if section in ['TEMPLATE']:
+                kegg_gene_entry[section] = kegg_gene_entry[section]
+
+            elif section in ['ENTRY', 'NAME', 'ORTHOLOGY', 'ORGANISM', 'POSITION', 'SYMBOL', 'STRUCTURE']:
+                kegg_gene_entry[section] = kegg_gene_entry[section][0]
+
+            elif section in ['PATHWAY', 'MODULE']: 
+                # NOTE: PATHWAY contains two spaces between the identifier and name which is why I'm not splitting on the first instance of whitespace.
+                # 'zma00591  Linoleic acid metabolism'
+                #          ^^        ^    ^
+                kegg_gene_entry[section] = dict([e.split('  ') for e in kegg_gene_entry[section]])            
+
+            elif section in ['BRITE']:
+                # This dict is only expected to have a single key. Representing these data as a dict allows for the 
+                # list checking logic above to still work.
+                kegg_gene_entry[section] = {"BRITE_PATHS": _gene_entry_BRITE(section_entry = kegg_gene_entry[section])}
+
+#             elif section in ['MODULE']:
+#                 pass
+#                 kegg_gene_entry[section] = _gene_entry_flat_list(section_entry=kegg_gene_entry[section])
+                
+            elif section in ['MOTIF', 'DBLINKS']:
+                kegg_gene_entry[section] = _gene_entry_flat_list(section_entry=kegg_gene_entry[section])
+
+            elif section in ['AASEQ', 'NTSEQ']:
+                kegg_gene_entry[section] = _gene_seq_to_dict(seq_list = kegg_gene_entry[section])
+
+            else:
+                print("No behavior defined for "+section)
+
+    return(kegg_gene_entry)
+```
+
+```{python}
+parsed_kegg_gene_entries = [parse_kegg_gene_entry(kegg_gene_entry = kegg_gene_entry
+#                                                  ) for kegg_gene_entry in tqdm.tqdm(kegg_gene_entries)]
+                                                 ) for kegg_gene_entry in kegg_gene_entries]
+```
+
+## Write out cleaned data
+
+```{python}
+save_dir = '../data/zma/kegg/'
+
+ensure_dir_path_exists(dir_path = '../data/zma/kegg/')
+```
+
+```{python}
+with open(save_dir+'kegg_gene_entries.pkl', 'wb') as handle:
+    pkl.dump(parsed_kegg_gene_entries, 
+             handle, 
+             protocol=pkl.HIGHEST_PROTOCOL)
+    
+# Reading in data
+# with open('../data/zma/kegg/kegg_gene_entries.pkl', 'rb') as handle:
+#     kegg_gene_entries = pkl.load(handle)
+```
+
+## Visualize KEGG data
+
+```{python}
+# Restrict to only those with pathway
+kegg_gene_brite = [e for e in parsed_kegg_gene_entries if 'BRITE' in e.keys()]
+```
+
+```{python}
+i = 0
+is_list = []
+for i in tqdm(range(len(kegg_gene_brite))):
+    js_list = []
+    for j in range(len(kegg_gene_brite[i]['BRITE']['BRITE_PATHS'])): 
+        entries_path = kegg_gene_brite[i]['BRITE']['BRITE_PATHS'][j]
+        if entries_path != []:
+        
+            temp = pd.DataFrame(entries_path)
+            temp = temp.T
+            temp['ENTRY'] = kegg_gene_brite[i]['ENTRY']+'_'+str(j)
+            
+            js_list = js_list + [temp]
+            
+    if js_list != []:
+        is_list = is_list + [pd.concat(js_list)]
+    
+
+# is_list
+
+BRITE_df = pd.concat(is_list)
+
+BRITE_df = BRITE_df.drop_duplicates().reset_index().drop(columns = 'index')
+BRITE_df
+```
+
+```{python}
+BRITE_df
+```
+
+```{python}
+#TODO find out what is causing levels deeper than 3 or the indices below (and others) to fail
+fig = px.treemap(BRITE_df.loc[:
+#     (
+#     (BRITE_df.index != 7480) &
+#     (BRITE_df.index != 8131) &
+#     (BRITE_df.index != 8838) &
+#     (BRITE_df.index != 8837) &
+#     (BRITE_df.index != 8836)
+# )
+    , :], path=[px.Constant("all"), 0, 1, 2, 3, #4, 5, 6
+            ], 
+#                  values='a'
+                )
+fig.update_traces(root_color="lightgrey")
+fig.update_layout(margin = dict(t=50, l=25, r=25, b=25))
+fig.show()
+```
+
+```{python}
+#| '0': h
+#| '1': i
+#| '2': d
+#| '3': e
+import nbdev; nbdev.nbdev_export()
+```
+
+
