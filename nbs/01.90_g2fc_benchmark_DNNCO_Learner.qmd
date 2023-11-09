@@ -930,7 +930,7 @@ optimizer = DNNS.configure_optimizers()
 logger = TensorBoardLogger("tb_logs", name="dnnco-x2")
 trainer = pl.Trainer(#limit_train_batches=100, 
                      max_epochs=10, logger=logger)
-trainer.fit(model=DNNX, train_dataloaders=training_dataloader)
+trainer.fit(model=DNNX, train_dataloaders=training_dataloader)+
 ```
 
 
