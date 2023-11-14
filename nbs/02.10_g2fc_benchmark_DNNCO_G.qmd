@@ -1,11 +1,10 @@
 ---
-title: Benchmark DNNCO G Only
 jupyter: python3
 ---
 
+# Benchmark DNNCO G Only
 
 > 
-
 
 ```{python}
 import os, json, re
@@ -27,6 +26,7 @@ from EnvDL.dlfn import * # includes LSUV_
 
 from tqdm import tqdm
 ```
+
 
 ```{python}
 use_gpu_num = 0
@@ -242,69 +242,7 @@ class GSWDataset(Dataset): # for any G containing matix with many (phno) to one 
         return y_idx, g_idx, s_idx, w_idx
 ```
 
-
-```{python}
- 
-```
-
 ### Create train/test validate indicies from json
-
-```{python}
-# TODO move these to a module
-def read_json(json_path):
-    with open(json_path, 'r') as fp:
-        dat = json.load(fp)
-    return(dat)
-
-def read_split_info(
-    load_from = '../nbs_artifacts/01.06_g2fc_cluster_genotypes/',
-    json_prefix = '2023:9:5:12:8:26'):
-    jsons = [e for e in os.listdir(load_from) if re.match('^'+json_prefix+'.+\.json$', e)]
-    vals = [e for e in jsons if re.match('.+val\d+\.json$', e)]
-    vals.sort()
-    out = {}
-    out['test'] = [read_json(json_path = load_from+json_prefix+'-test.json')]
-    out['test_file'] = [json_prefix+'-test.json']
-    out['validate'] = [read_json(json_path = load_from+val) for val in vals]
-    out['validate_files'] = [val for val in vals]
-    return(out)
-
-def find_idxs_split_dict(
-    obs_df, # assumes presence of Year, Female, Male
-    split_dict # from read_split_info() output. Should be a test of validate dict.
-):
-
-    temp = obs_df
-    test_mask = ((temp.Year.isin(split_dict['test_years'])) & 
-                 ((temp.Female.isin(split_dict['test_parents'])) |
-                  (temp.Male.isin(split_dict['test_parents']))))
-    temp['Split'] = ''
-    temp.loc[test_mask, 'Split'] = 'Test'
-
-    train_mask = (~(temp.Year.isin(split_dict['test_years'])) & 
-                 (~((temp.Female.isin(split_dict['test_parents'])) |
-                  (temp.Male.isin(split_dict['test_parents'])))))
-    temp.loc[train_mask, 'Split'] = 'Train'
-
-    temp_test  = (temp.Split == 'Test') # should be the same as with the mask above
-    temp_train = (temp.Split == 'Train') # should be the same as with the mask above
-
-    # Confirm that there's no overlap in parents or years
-    temp_test_parents  = set(temp.loc[temp_test, 'Female']+temp.loc[temp_test, 'Male'])
-    temp_train_parents = set(temp.loc[temp_train, 'Female']+temp.loc[temp_train, 'Male'])
-
-    temp_test_years  = set(temp.loc[temp_test, 'Year'])
-    temp_train_years = set(temp.loc[temp_train, 'Year'])
-
-    assert [] == [e for e in temp_test_parents if e in temp_train_parents]
-    assert [] == [e for e in temp_train_parents if e in temp_test_parents]
-    assert [] == [e for e in temp_test_years if e in temp_train_years]
-    assert [] == [e for e in temp_train_years if e in temp_test_years]
-
-    return({
-        'test_idx': temp.loc[test_mask, ].index, 
-        'train_idx': temp.loc[train_mask, ].index} )
-```
 
 ```{python}
 load_from = '../nbs_artifacts/01.06_g2fc_cluster_genotypes/'
@@ -416,38 +354,38 @@ testing_dataloader = DataLoader(
 ```
 
 ```{python}
-y_idx, g_idx, s_idx, w_idx = next(iter(training_dataloader))
+# y_idx, g_idx, s_idx, w_idx = next(iter(training_dataloader))
 ```
 
 ## Use Pytorch Lightning to Train each Model
 
 ```{python}
-def Linear_block(in_size, out_size, drop_pr):
-    block = nn.Sequential(
-        nn.Linear(in_size, out_size),
-        nn.ReLU(),
-        nn.Dropout(drop_pr)
-    )
-    return(block) 
+# def Linear_block(in_size, out_size, drop_pr):
+#     block = nn.Sequential(
+#         nn.Linear(in_size, out_size),
+#         nn.ReLU(),
+#         nn.Dropout(drop_pr)
+#     )
+#     return(block) 
 
-def Conv1D_x2_Max_block(in_channels, out_channels, kernel_size, stride, maxpool_size):
-    block = nn.Sequential(
-        nn.Conv1d(
-            in_channels= in_channels, # second channel
-            out_channels= out_channels,
-            kernel_size= kernel_size,
-            stride= stride
-        ), 
-        nn.Conv1d(
-            in_channels= out_channels, 
-            out_channels= out_channels,
-            kernel_size= kernel_size,
-            stride= stride
-        ), 
-        nn.BatchNorm1d(out_channels),
-        nn.MaxPool1d((maxpool_size), stride=stride)
-    )
-    return(block)
+# def Conv1D_x2_Max_block(in_channels, out_channels, kernel_size, stride, maxpool_size):
+#     block = nn.Sequential(
+#         nn.Conv1d(
+#             in_channels= in_channels, # second channel
+#             out_channels= out_channels,
+#             kernel_size= kernel_size,
+#             stride= stride
+#         ), 
+#         nn.Conv1d(
+#             in_channels= out_channels, 
+#             out_channels= out_channels,
+#             kernel_size= kernel_size,
+#             stride= stride
+#         ), 
+#         nn.BatchNorm1d(out_channels),
+#         nn.MaxPool1d((maxpool_size), stride=stride)
+#     )
+#     return(block)
 ```
 
 ```{python}
@@ -608,11 +546,11 @@ class plDNNCO_subnet(pl.LightningModule):
         self.log("train_loss", loss)
         # calculate layerwise stats 
         
-#         with torch.no_grad():
-#             weight_list=[(name, param) for name, param in model.named_parameters() if name.split('.')[-1] == 'weight']
-#             for l in weight_list:
-#                 self.log(("train_mean"+l[0]), l[1].mean())
-#                 self.log(("train_std"+l[0]), l[1].std())        
+        with torch.no_grad():
+            weight_list=[(name, param) for name, param in model.named_parameters() if name.split('.')[-1] == 'weight']
+            for l in weight_list:
+                self.log(("train_mean"+l[0]), l[1].mean())
+                self.log(("train_std"+l[0]), l[1].std())        
         
         return(loss)
         
@@ -687,56 +625,54 @@ adam_params ={
 ```{python}
 subnet = 'g'                                                         # 0. Update
 lr, beta1, beta2, batch_size, max_epoch = adam_params[subnet]
-# max_epoch = 2 #FIXME
-training_dataloader = DataLoader(
-    GSWDataset(
-        y = torch.from_numpy(y_cs[train_idx])[:, None].to(torch.float32), #torch.from_numpy(YMat[[0, 1], ]), 
-        G = torch.from_numpy(g_cs).to(torch.float32), 
-        S = torch.from_numpy(s_cs).to(torch.float32),
-        W = torch.from_numpy(w_cs).to(torch.float32),
-        planting = PlantHarvest[:, 0],
-        days_before_planting = 60,
-        days_after_planting = 194,
-        idx_original = torch.from_numpy(np.array(train_idx)),#[:, None],
-        idx_lookup_geno = obs_geno_lookup,
-        idx_lookup_env = obs_env_lookup,
-        device = 'cuda'),
-    batch_size = batch_size,
-    shuffle = True
-)
+# # max_epoch = 2 #FIXME
+# training_dataloader = DataLoader(
+#     GSWDataset(
+#         y = torch.from_numpy(y_cs[train_idx])[:, None].to(torch.float32), #torch.from_numpy(YMat[[0, 1], ]), 
+#         G = torch.from_numpy(g_cs).to(torch.float32), 
+#         S = torch.from_numpy(s_cs).to(torch.float32),
+#         W = torch.from_numpy(w_cs).to(torch.float32),
+#         planting = PlantHarvest[:, 0],
+#         days_before_planting = 60,
+#         days_after_planting = 194,
+#         idx_original = torch.from_numpy(np.array(train_idx)),#[:, None],
+#         idx_lookup_geno = obs_geno_lookup,
+#         idx_lookup_env = obs_env_lookup,
+#         device = 'cuda'),
+#     batch_size = batch_size,
+#     shuffle = True
+# )
 
-validation_dataloader = DataLoader(
-    GSWDataset(
-        y = torch.from_numpy(y_cs[test_idx])[:, None].to(torch.float32), #torch.from_numpy(YMat[[0, 1], ]), 
-        G = torch.from_numpy(g_cs).to(torch.float32), 
-        S = torch.from_numpy(s_cs).to(torch.float32),
-        W = torch.from_numpy(w_cs).to(torch.float32),
-        planting = PlantHarvest[:, 0],
-        days_before_planting = 60,
-        days_after_planting = 194,
-        idx_original = torch.from_numpy(np.array(test_idx)),#[:, None],
-        idx_lookup_geno = obs_geno_lookup,
-        idx_lookup_env = obs_env_lookup,
-        device = 'cuda'),
-    batch_size = batch_size,
-    shuffle = True
-)
+# validation_dataloader = DataLoader(
+#     GSWDataset(
+#         y = torch.from_numpy(y_cs[test_idx])[:, None].to(torch.float32), #torch.from_numpy(YMat[[0, 1], ]), 
+#         G = torch.from_numpy(g_cs).to(torch.float32), 
+#         S = torch.from_numpy(s_cs).to(torch.float32),
+#         W = torch.from_numpy(w_cs).to(torch.float32),
+#         planting = PlantHarvest[:, 0],
+#         days_before_planting = 60,
+#         days_after_planting = 194,
+#         idx_original = torch.from_numpy(np.array(test_idx)),#[:, None],
+#         idx_lookup_geno = obs_geno_lookup,
+#         idx_lookup_env = obs_env_lookup,
+#         device = 'cuda'),
+#     batch_size = batch_size,
+#     shuffle = True
+# )
 ```
 
 ```{python}
-DNNG = plDNNCO_subnet(DNNCO_G().to(device))                          # 1. Update
-optimizer = DNNG.configure_optimizers(lr = lr, betas=(beta1, beta2)) # 2. Update
+# DNNG = plDNNCO_subnet(DNNCO_G().to(device))                          # 1. Update
+# optimizer = DNNG.configure_optimizers(lr = lr, betas=(beta1, beta2)) # 2. Update
 
-logger = TensorBoardLogger("tb_logs", name="dnnco-g")                # 3. Update
-trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
+# logger = TensorBoardLogger("tb_logs", name="dnnco-g")                # 3. Update
+# trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
 
-trainer.fit(model=DNNG, 
-            train_dataloaders=training_dataloader, val_dataloaders= validation_dataloader)       # 4. Update
+# trainer.fit(model=DNNG, 
+#             train_dataloaders=training_dataloader, val_dataloaders= validation_dataloader)       # 4. Update
 ```
 
 ```{python}
-
-
 # As currently formulated LSUV_ only works if a single data object is passed in.
 # options are to 
 # 1. rewrite dataloader with a dict of data
@@ -744,24 +680,21 @@ trainer.fit(model=DNNG,
 # 3. use kaiming and come back to this.
 # LSUV_(model, data = next(iter(training_dataloader))[1:])
 
-model = DNNCO_G().to(device)
+# model = DNNCO_G().to(device)
 
-def init_weigths(m):
-    if isinstance(m, (nn.Linear)): nn.init.kaiming_normal_(m.weight)
+# def init_weigths(m):
+#     if isinstance(m, (nn.Linear)): nn.init.kaiming_normal_(m.weight)
         
-model = model.apply(init_weigths)
+# model = model.apply(init_weigths)
 
-DNNG = plDNNCO_subnet(model)                          # 1. Update
-optimizer = DNNG.configure_optimizers(lr = lr, betas=(beta1, beta2)) # 2. Update
+# DNNG = plDNNCO_subnet(model)                          # 1. Update
+# optimizer = DNNG.configure_optimizers(lr = lr, betas=(beta1, beta2)) # 2. Update
 
-logger = TensorBoardLogger("tb_logs", name="dnnco-g-k")                # 3. Update
-trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
+# logger = TensorBoardLogger("tb_logs", name="dnnco-g-k")                # 3. Update
+# trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
 
-trainer.fit(model=DNNG, train_dataloaders=training_dataloader,val_dataloaders= validation_dataloader)       # 4. Update
+# trainer.fit(model=DNNG, train_dataloaders=training_dataloader,val_dataloaders= validation_dataloader)       # 4. Update
 ```
-
-
-
 
 ```{python}
 # LSUV compatable version
@@ -925,6 +858,12 @@ class plDNNCO_subnet(pl.LightningModule):
         # print(y_i.shape, pred.shape)
         loss = F.mse_loss(pred, y_i)
         self.log("train_loss", loss)
+        
+        with torch.no_grad():
+            weight_list=[(name, param) for name, param in model.named_parameters() if name.split('.')[-1] == 'weight']
+            for l in weight_list:
+                self.log(("train_mean"+l[0]), l[1].mean())
+                self.log(("train_std"+l[0]), l[1].std())        
         return(loss)
         
     def validation_step(self, batch, batch_idx):
@@ -942,7 +881,6 @@ class plDNNCO_subnet(pl.LightningModule):
 ```
 
 ```{python}
-
 DNNG = plDNNCO_subnet(model)                          # 1. Update
 optimizer = DNNG.configure_optimizers(lr = lr, betas=(beta1, beta2)) # 2. Update
 
@@ -953,6 +891,9 @@ trainer.fit(model=DNNG, train_dataloaders=training_dataloader, val_dataloaders=v
 ```
 
 
+```{python}
+torch.save(DNNG.mod, cache_path+'dnnco-g-lsuv'+'.pt')
+```
 
 
 
@@ -961,75 +902,75 @@ trainer.fit(model=DNNG, train_dataloaders=training_dataloader, val_dataloaders=v
 
 
 ```{python}
-subnet = 's'                                                         # 0. Update
-lr, beta1, beta2, batch_size, max_epoch = adam_params[subnet]
-max_epoch = 2 #FIXME
-training_dataloader = DataLoader(
-    GSWDataset(
-        y = torch.from_numpy(y_cs[train_idx])[:, None].to(torch.float32), #torch.from_numpy(YMat[[0, 1], ]), 
-        G = torch.from_numpy(g_cs).to(torch.float32), 
-        S = torch.from_numpy(s_cs).to(torch.float32),
-        W = torch.from_numpy(w_cs).to(torch.float32),
-        planting = PlantHarvest[:, 0],
-        days_before_planting = 60,
-        days_after_planting = 194,
-        idx_original = torch.from_numpy(np.array(train_idx)),#[:, None],
-        idx_lookup_geno = obs_geno_lookup,
-        idx_lookup_env = obs_env_lookup,
-        device = 'cuda'),
-    batch_size = batch_size,
-    shuffle = True
-)
+# subnet = 's'                                                         # 0. Update
+# lr, beta1, beta2, batch_size, max_epoch = adam_params[subnet]
+# max_epoch = 2 #FIXME
+# training_dataloader = DataLoader(
+#     GSWDataset(
+#         y = torch.from_numpy(y_cs[train_idx])[:, None].to(torch.float32), #torch.from_numpy(YMat[[0, 1], ]), 
+#         G = torch.from_numpy(g_cs).to(torch.float32), 
+#         S = torch.from_numpy(s_cs).to(torch.float32),
+#         W = torch.from_numpy(w_cs).to(torch.float32),
+#         planting = PlantHarvest[:, 0],
+#         days_before_planting = 60,
+#         days_after_planting = 194,
+#         idx_original = torch.from_numpy(np.array(train_idx)),#[:, None],
+#         idx_lookup_geno = obs_geno_lookup,
+#         idx_lookup_env = obs_env_lookup,
+#         device = 'cuda'),
+#     batch_size = batch_size,
+#     shuffle = True
+# )
 
-DNNS = plDNNCO_subnet(DNNCO_S().to(device))                          # 1. Update
-optimizer = DNNS.configure_optimizers(lr = lr, betas=(beta1, beta2)) # 2. Update
+# DNNS = plDNNCO_subnet(DNNCO_S().to(device))                          # 1. Update
+# optimizer = DNNS.configure_optimizers(lr = lr, betas=(beta1, beta2)) # 2. Update
 
-logger = TensorBoardLogger("tb_logs", name="dnnco-s")                # 3. Update
-trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
+# logger = TensorBoardLogger("tb_logs", name="dnnco-s")                # 3. Update
+# trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
 
-trainer.fit(model=DNNS, train_dataloaders=training_dataloader)       # 4. Update
+# trainer.fit(model=DNNS, train_dataloaders=training_dataloader)       # 4. Update
 ```
 
 ```{python}
-subnet = 'w'                                                         # 0. Update
-lr, beta1, beta2, batch_size, max_epoch = adam_params[subnet]
-max_epoch = 2 #FIXME
-training_dataloader = DataLoader(
-    GSWDataset(
-        y = torch.from_numpy(y_cs[train_idx])[:, None].to(torch.float32), #torch.from_numpy(YMat[[0, 1], ]), 
-        G = torch.from_numpy(g_cs).to(torch.float32), 
-        S = torch.from_numpy(s_cs).to(torch.float32),
-        W = torch.from_numpy(w_cs).to(torch.float32),
-        planting = PlantHarvest[:, 0],
-        days_before_planting = 60,
-        days_after_planting = 194,
-        idx_original = torch.from_numpy(np.array(train_idx)),#[:, None],
-        idx_lookup_geno = obs_geno_lookup,
-        idx_lookup_env = obs_env_lookup,
-        device = 'cuda'),
-    batch_size = batch_size,
-    shuffle = True
-)
+# subnet = 'w'                                                         # 0. Update
+# lr, beta1, beta2, batch_size, max_epoch = adam_params[subnet]
+# max_epoch = 2 #FIXME
+# training_dataloader = DataLoader(
+#     GSWDataset(
+#         y = torch.from_numpy(y_cs[train_idx])[:, None].to(torch.float32), #torch.from_numpy(YMat[[0, 1], ]), 
+#         G = torch.from_numpy(g_cs).to(torch.float32), 
+#         S = torch.from_numpy(s_cs).to(torch.float32),
+#         W = torch.from_numpy(w_cs).to(torch.float32),
+#         planting = PlantHarvest[:, 0],
+#         days_before_planting = 60,
+#         days_after_planting = 194,
+#         idx_original = torch.from_numpy(np.array(train_idx)),#[:, None],
+#         idx_lookup_geno = obs_geno_lookup,
+#         idx_lookup_env = obs_env_lookup,
+#         device = 'cuda'),
+#     batch_size = batch_size,
+#     shuffle = True
+# )
 
-DNNW = plDNNCO_subnet(DNNCO_W().to(device))                          # 1. Update
-optimizer = DNNW.configure_optimizers(lr = lr, betas=(beta1, beta2)) # 2. Update
+# DNNW = plDNNCO_subnet(DNNCO_W().to(device))                          # 1. Update
+# optimizer = DNNW.configure_optimizers(lr = lr, betas=(beta1, beta2)) # 2. Update
 
-logger = TensorBoardLogger("tb_logs", name="dnnco-w")                # 3. Update
-trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
+# logger = TensorBoardLogger("tb_logs", name="dnnco-w")                # 3. Update
+# trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
 
-trainer.fit(model=DNNW, train_dataloaders=training_dataloader)       # 4. Update
+# trainer.fit(model=DNNW, train_dataloaders=training_dataloader)       # 4. Update
 ```
 
 ```{python}
-# Now freeze layers to be extra sure they are not updated
-for param in DNNG.mod.parameters():
-    param.requires_grad = False
+# # Now freeze layers to be extra sure they are not updated
+# for param in DNNG.mod.parameters():
+#     param.requires_grad = False
     
-for param in DNNS.mod.parameters():
-    param.requires_grad = False
+# for param in DNNS.mod.parameters():
+#     param.requires_grad = False
     
-for param in DNNW.mod.parameters():
-    param.requires_grad = False
+# for param in DNNW.mod.parameters():
+#     param.requires_grad = False
 ```
 
 ```{python}
@@ -1051,52 +992,52 @@ for param in DNNW.mod.parameters():
 ```
 
 ```{python}
-subnet = 'co'                                                        # 0. Update
-lr, beta1, beta2, batch_size, max_epoch = adam_params[subnet]
-max_epoch = 2 #FIXME
-training_dataloader = DataLoader(
-    GSWDataset(
-        y = torch.from_numpy(y_cs[train_idx])[:, None].to(torch.float32), #torch.from_numpy(YMat[[0, 1], ]), 
-        G = torch.from_numpy(g_cs).to(torch.float32), 
-        S = torch.from_numpy(s_cs).to(torch.float32),
-        W = torch.from_numpy(w_cs).to(torch.float32),
-        planting = PlantHarvest[:, 0],
-        days_before_planting = 60,
-        days_after_planting = 194,
-        idx_original = torch.from_numpy(np.array(train_idx)),#[:, None],
-        idx_lookup_geno = obs_geno_lookup,
-        idx_lookup_env = obs_env_lookup,
-        device = 'cuda'),
-    batch_size = batch_size,
-    shuffle = True
-)
+# subnet = 'co'                                                        # 0. Update
+# lr, beta1, beta2, batch_size, max_epoch = adam_params[subnet]
+# max_epoch = 2 #FIXME
+# training_dataloader = DataLoader(
+#     GSWDataset(
+#         y = torch.from_numpy(y_cs[train_idx])[:, None].to(torch.float32), #torch.from_numpy(YMat[[0, 1], ]), 
+#         G = torch.from_numpy(g_cs).to(torch.float32), 
+#         S = torch.from_numpy(s_cs).to(torch.float32),
+#         W = torch.from_numpy(w_cs).to(torch.float32),
+#         planting = PlantHarvest[:, 0],
+#         days_before_planting = 60,
+#         days_after_planting = 194,
+#         idx_original = torch.from_numpy(np.array(train_idx)),#[:, None],
+#         idx_lookup_geno = obs_geno_lookup,
+#         idx_lookup_env = obs_env_lookup,
+#         device = 'cuda'),
+#     batch_size = batch_size,
+#     shuffle = True
+# )
 
-# DNNW = plDNNCO_subnet(DNNCO_W().to(device))                          # 1. Update
-# optimizer = DNNW.configure_optimizers(lr = lr, betas=(beta1, beta2)) # 2. Update
+# # DNNW = plDNNCO_subnet(DNNCO_W().to(device))                          # 1. Update
+# # optimizer = DNNW.configure_optimizers(lr = lr, betas=(beta1, beta2)) # 2. Update
 
-# logger = TensorBoardLogger("tb_logs", name="dnnco-w")                # 3. Update
+# # logger = TensorBoardLogger("tb_logs", name="dnnco-w")                # 3. Update
+# # trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
+
+# # trainer.fit(model=DNNW, train_dataloaders=training_dataloader)       # 4. Update
+
+
+# DNNX = plDNNCO_X(DNNCO_X().to(device), Gmod = DNNG.mod, Smod = DNNS.mod, Wmod = DNNW.mod)
+# optimizer = DNNX.configure_optimizers(lr = lr, betas=(beta1, beta2))
+
+# logger = TensorBoardLogger("tb_logs", name="dnnco-x")
 # trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
 
-# trainer.fit(model=DNNW, train_dataloaders=training_dataloader)       # 4. Update
-
-
-DNNX = plDNNCO_X(DNNCO_X().to(device), Gmod = DNNG.mod, Smod = DNNS.mod, Wmod = DNNW.mod)
-optimizer = DNNX.configure_optimizers(lr = lr, betas=(beta1, beta2))
-
-logger = TensorBoardLogger("tb_logs", name="dnnco-x")
-trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
-
-trainer.fit(model=DNNX, train_dataloaders=training_dataloader)
+# trainer.fit(model=DNNX, train_dataloaders=training_dataloader)
 ```
 
 
 ```{python}
-DNNX = plDNNCO_X(DNNCO_X().to(device), Gmod = DNNG.mod, Smod = DNNS.mod, Wmod = DNNW.mod)
-optimizer = DNNS.configure_optimizers()
-logger = TensorBoardLogger("tb_logs", name="dnnco-x2")
-trainer = pl.Trainer(#limit_train_batches=100, 
-                     max_epochs=10, logger=logger)
-trainer.fit(model=DNNX, train_dataloaders=training_dataloader)
+# DNNX = plDNNCO_X(DNNCO_X().to(device), Gmod = DNNG.mod, Smod = DNNS.mod, Wmod = DNNW.mod)
+# optimizer = DNNS.configure_optimizers()
+# logger = TensorBoardLogger("tb_logs", name="dnnco-x2")
+# trainer = pl.Trainer(#limit_train_batches=100, 
+#                      max_epochs=10, logger=logger)
+# trainer.fit(model=DNNX, train_dataloaders=training_dataloader)
 ```
 
 
