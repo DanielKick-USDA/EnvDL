@@ -135,7 +135,8 @@ def calc_needed_hilbert_p(n_needed = 1048576,
 
 # %% ../nbs/00.01_core_dna.ipynb 32
 def np_2d_to_hilbert(
-    in_seq # This should be a 2d numpy array with dimensions of [sequence, channels] 
+    in_seq, # This should be a 2d numpy array with dimensions of [sequence, channels] 
+    **kwargs # for silent
 ):
     import numpy as np
     import tqdm
@@ -167,14 +168,19 @@ def np_2d_to_hilbert(
     temp_mat = np.zeros(shape = [dim_0, dim_1, n_channels])
     temp_mat[temp_mat == 0] = np.nan         #  empty values being used for visualization
 
-    for i in tqdm(range(n_snps)):
-        temp_mat[points[i][0], points[i][1], :] = temp[i]
+    if "silent" in kwargs:
+        for i in range(n_snps):
+            temp_mat[points[i][0], points[i][1], :] = temp[i]
+    else:
+        for i in tqdm(range(n_snps)):
+            temp_mat[points[i][0], points[i][1], :] = temp[i]
 
     return(temp_mat)
 
 # %% ../nbs/00.01_core_dna.ipynb 33
 def np_3d_to_hilbert(
-    in_seq # This should be a 3d numpy array with dimensions of [samples, sequence, channels] 
+    in_seq, # This should be a 3d numpy array with dimensions of [samples, sequence, channels] 
+    **kwargs
 ):
     "This is the 3d version of `np_2d_to_hilbert`. The goal is to process all of the samples of an array in one go."
     import numpy as np
@@ -206,10 +212,16 @@ def np_3d_to_hilbert(
     dim_1 = np.max(np.array(points)[:, 1])+1
     temp_mat = np.zeros(shape = [in_seq.shape[0], dim_0, dim_1, n_channels])
     temp_mat[temp_mat == 0] = np.nan         #  empty values being used for visualization
-
-    for i in tqdm(range(n_snps)):
-        temp_mat[:,                          # sample
-                 points[i][0], points[i][1], # x, y
-                 :] = temp[:, i]             # channels
+    
+    if "silent" in kwargs:
+        for i in range(n_snps):
+            temp_mat[:,                          # sample
+                     points[i][0], points[i][1], # x, y
+                     :] = temp[:, i]             # channels
+    else:
+        for i in tqdm(range(n_snps)):
+            temp_mat[:,                          # sample
+                     points[i][0], points[i][1], # x, y
+                     :] = temp[:, i]             # channels
 
     return(temp_mat)

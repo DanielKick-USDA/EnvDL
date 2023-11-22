@@ -215,6 +215,54 @@ def LSUV_(model, data, apply_only_to=['Conv', 'Linear', 'Bilinear'],
     if not was_training: model.eval()
 ```
 
+## Network Components
+
+```{python}
+#| '0': e
+#| '1': x
+#| '2': p
+#| '3': o
+#| '4': r
+#| '5': t
+def Linear_block(in_size, out_size, drop_pr):
+    import torch.nn as nn
+    block = nn.Sequential(
+        nn.Linear(in_size, out_size),
+        nn.ReLU(),
+        nn.Dropout(drop_pr)
+    )
+    return(block) 
+```
+
+
+```{python}
+#| '0': e
+#| '1': x
+#| '2': p
+#| '3': o
+#| '4': r
+#| '5': t
+def Conv1D_x2_Max_block(in_channels, out_channels, kernel_size, stride, maxpool_size):
+    import torch.nn as nn
+    block = nn.Sequential(
+        nn.Conv1d(
+            in_channels= in_channels, # second channel
+            out_channels= out_channels,
+            kernel_size= kernel_size,
+            stride= stride
+        ), 
+        nn.Conv1d(
+            in_channels= out_channels, 
+            out_channels= out_channels,
+            kernel_size= kernel_size,
+            stride= stride
+        ), 
+        nn.BatchNorm1d(out_channels),
+        nn.MaxPool1d((maxpool_size), stride=stride)
+    )
+    return(block)
+```
+
 ## Training (general)
 
 ```{python}
