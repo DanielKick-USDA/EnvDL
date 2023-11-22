@@ -1,10 +1,11 @@
 ---
+title: Benchmark DNNSO
 jupyter: python3
 ---
 
-# Benchmark DNNSO
 
 > 
+
 
 ```{python}
 import os, json, re
@@ -454,10 +455,10 @@ optimizer = DNNCOSO.configure_optimizers(lr = lr, betas=(beta1, beta2)) # 2. Upd
 logger = TensorBoardLogger("tb_logs", name="dnnso")                # 3. Update
 trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
 
-trainer.fit(model=DNNCOSO, train_dataloaders=training_dataloader)       # 4. Update
+trainer.fit(model=DNNCOSO, train_dataloaders=training_dataloader, val_dataloaders=validation_dataloader)       # 4. Update
 ```
 
 ```{python}
-torch.save(DNNG.mod, cache_path+'dnnco-so'+'.pt')
+torch.save(DNNCOSO.mod, cache_path+'dnnco-so'+'.pt')
 ```
 

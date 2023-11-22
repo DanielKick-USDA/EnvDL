@@ -1,10 +1,11 @@
 ---
+title: Benchmark DNNCO X
 jupyter: python3
 ---
 
-# Benchmark DNNCO X
 
 > 
+
 
 ```{python}
 import os, json, re
@@ -26,7 +27,6 @@ from EnvDL.dlfn import * # includes LSUV_
 
 from tqdm import tqdm
 ```
-
 
 ```{python}
 use_gpu_num = 0
@@ -141,7 +141,6 @@ assert window_start.min() >= 0
 assert window_end.max() <= 364 #pd.to_datetime() is 0 indexed
 ```
 
-
 ### Create train/test validate indicies from json
 
 ```{python}
@@ -215,73 +214,7 @@ GMat_cs = calc_cs(GMat[list(set(obs_geno_lookup[train_idx, 1])), ])
 g_cs = apply_cs(GMat, GMat_cs)
 ```
 
-
-
 ## Use Pytorch Lightning to Train each Model
-
-
-
-
-
-
-
-
-
-
-```{python}
-# [[e.shape for e in DNNCO_G().to(device)(g_idx, s_idx, w_idx)],
-#  [e.shape for e in DNNCO_S().to(device)(g_idx, s_idx, w_idx)],
-#  [e.shape for e in DNNCO_W().to(device)(g_idx, s_idx, w_idx)]]
-```
-
-
-```{python}
-# # Module for training subnetworks.
-# class plDNNCO_subnet(pl.LightningModule):
-#     def __init__(self, mod):
-#         super().__init__()
-#         self.mod = mod
-        
-#     def training_step(self, batch, batch_idx):
-#         # train loop
-#         y_i, g_i, s_i, w_i = batch
-#         pred, out = self.mod(g_i, s_i, w_i)
-#         # print(y_i.shape, pred.shape)
-#         loss = F.mse_loss(pred, y_i)
-#         self.log("train_loss", loss)
-#         # calculate layerwise stats 
-        
-#         with torch.no_grad():
-#             weight_list=[(name, param) for name, param in model.named_parameters() if name.split('.')[-1] == 'weight']
-#             for l in weight_list:
-#                 self.log(("train_mean"+l[0]), l[1].mean())
-#                 self.log(("train_std"+l[0]), l[1].std())        
-        
-#         return(loss)
-        
-#     def validation_step(self, batch, batch_idx):
-#         y_i, g_i, s_i, w_i = batch
-#         pred, out = self.mod(g_i, s_i, w_i)
-#         # print(y_i.shape, pred.shape)
-#         loss = F.mse_loss(pred, y_i)
-#         self.log('val_loss', loss)        
-     
-#     def configure_optimizers(self, **kwargs):
-#         optimizer = torch.optim.Adam(self.parameters(), **kwargs)
-#         return optimizer    
-    
-    
-# # DNNG = plDNNCO_G(DNNCO_G().to(device))
-
-# # optimizer = DNNG.configure_optimizers()
-
-# # for batch_idx, batch in tqdm(enumerate(training_dataloader)):
-# #     loss = DNNG.training_step(batch, batch_idx)
-# #     loss.backward()
-# #     optimizer.step()
-# #     optimizer.zero_grad()    
-```
-
 
 ### Train with logger
 
@@ -416,219 +349,124 @@ validation_dataloader = DataLoader(
 ```
 
 ```{python}
-# Module for training subnetworks.
-class plDNNCO_subnet(pl.LightningModule):
-    def __init__(self, mod):
-        super().__init__()
-        self.mod = mod
+class DNNCO_G(nn.Module):
+    def __init__(self):
+        super(DNNCO_G, self).__init__()    
         
-    def training_step(self, batch, batch_idx):
-        # train loop
-#         y_i, g_i, s_i, w_i = batch
-#         pred, out = self.mod(g_i, s_i, w_i)
-        y_i, _, _, _ = batch
-        pred, out = self.mod(batch)
-        # print(y_i.shape, pred.shape)
-        loss = F.mse_loss(pred, y_i)
-        self.log("train_loss", loss)
-        
-        with torch.no_grad():
-            weight_list=[(name, param) for name, param in model.named_parameters() if name.split('.')[-1] == 'weight']
-            for l in weight_list:
-                self.log(("train_mean"+l[0]), l[1].mean())
-                self.log(("train_std"+l[0]), l[1].std())        
-        return(loss)
-        
-    def validation_step(self, batch, batch_idx):
-#         y_i, g_i, s_i, w_i = batch
-#         pred, out = self.mod(g_i, s_i, w_i)
-        y_i, _, _, _ = batch
-        pred, out = self.mod(batch)
-        # print(y_i.shape, pred.shape)
-        loss = F.mse_loss(pred, y_i)
-        self.log('val_loss', loss)        
-     
-    def configure_optimizers(self, **kwargs):
-        optimizer = torch.optim.Adam(self.parameters(), **kwargs)
-        return optimizer    
-```
-
-```{python}
-# # [[ee.shape for ee in e] for e in next(iter(training_dataloader))]
-
-# class DNNCO_G(nn.Module):
-#     def __init__(self):
-#         super(DNNCO_G, self).__init__()    
-        
-#         self.g_network =nn.Sequential(
-#             Linear_block(in_size= 4881, out_size= 83, drop_pr= 0.163923177),
-#             Linear_block(in_size= 83,   out_size= 133, drop_pr= 0.230663142)
-#         ) 
-#         self.g_pred =nn.Sequential(
-#             nn.Linear(133, 1)
-#         ) 
+        self.g_network =nn.Sequential(
+            Linear_block(in_size= 4881, out_size= 83, drop_pr= 0.163923177),
+            Linear_block(in_size= 83,   out_size= 133, drop_pr= 0.230663142)
+        ) 
+        self.g_pred =nn.Sequential(
+            nn.Linear(133, 1)
+        ) 
                 
-#     def forward(self, tensor_list):
-#         y, g, s, w = tensor_list
-#         g_out = self.g_network(g)
-#         g_pred = self.g_pred(g_out)
-#         return g_pred, g_out
+    def forward(self, tensor_list):
+        y, g, s, w = tensor_list
+        g_out = self.g_network(g)
+        g_pred = self.g_pred(g_out)
+        return g_pred, g_out
+
+DNNG = torch.load('../nbs_artifacts/02.10_g2fc_benchmark_DNNCO_G/dnnco-g.pt')
+```
+
+```{python}
+class DNNCO_S(nn.Module):
+    def __init__(self):
+        super(DNNCO_S, self).__init__()    
+        
+        self.s_network =nn.Sequential(
+            Linear_block(in_size= 23, out_size= 38, drop_pr= 0.148724301),
+            Linear_block(in_size= 38, out_size= 13, drop_pr= 0.276340999),
+            Linear_block(in_size= 13, out_size= 45, drop_pr= 0.005434164),
+            Linear_block(in_size= 45, out_size= 29, drop_pr= 0.173380695),
+            Linear_block(in_size= 29, out_size= 4,  drop_pr= 0.),
+            Linear_block(in_size= 4,  out_size= 4,  drop_pr= 0.),
+            Linear_block(in_size= 4,  out_size= 4,  drop_pr= 0.)
+        )  
+        self.s_pred =nn.Sequential(
+            nn.Linear(4, 1)
+        ) 
+        
+    def forward(self, tensor_list):
+        y, g, s, w = tensor_list
+        s_out = self.s_network(s)
+        s_pred = self.s_pred(s_out)
+        return s_pred, s_out
     
+DNNS = torch.load('../nbs_artifacts/02.11_g2fc_benchmark_DNNCO_S/dnnco-s.pt')
 ```
 
 ```{python}
-# DNNCO_G().to(device)(next(iter(training_dataloader)) )[0].shape
-
-# model = DNNCO_G().to(device)
-# LSUV_(model, data = next(iter(training_dataloader)) )
-```
-
-```{python}
-# DNNG = plDNNCO_subnet(model)                          # 1. Update
-# optimizer = DNNG.configure_optimizers(lr = lr, betas=(beta1, beta2)) # 2. Update
-
-# logger = TensorBoardLogger("tb_logs", name="dnnco-g-lsuv")                # 3. Update
-# trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
-
-# trainer.fit(model=DNNG, train_dataloaders=training_dataloader, val_dataloaders=validation_dataloader)       # 4. Update
-```
-
-```{python}
-# torch.save(DNNG.mod, cache_path+'dnnco-g-lsuv'+'.pt')
-```
-
-```{python}
-# class DNNCO_S(nn.Module):
-#     def __init__(self):
-#         super(DNNCO_S, self).__init__()    
+class DNNCO_W(nn.Module):
+    def __init__(self):
+        super(DNNCO_W, self).__init__()  
         
-#         self.s_network =nn.Sequential(
-#             Linear_block(in_size= 23, out_size= 38, drop_pr= 0.148724301),
-#             Linear_block(in_size= 38, out_size= 13, drop_pr= 0.276340999),
-#             Linear_block(in_size= 13, out_size= 45, drop_pr= 0.005434164),
-#             Linear_block(in_size= 45, out_size= 29, drop_pr= 0.173380695),
-#             Linear_block(in_size= 29, out_size= 4,  drop_pr= 0.),
-#             Linear_block(in_size= 4,  out_size= 4,  drop_pr= 0.),
-#             Linear_block(in_size= 4,  out_size= 4,  drop_pr= 0.)
-#         )  
-#         self.s_pred =nn.Sequential(
-#             nn.Linear(4, 1)
-#         ) 
+        self.w_network =nn.Sequential(
+            Conv1D_x2_Max_block(
+                in_channels = 16, 
+                out_channels = 433, 
+                kernel_size = 3,
+                maxpool_size = 2,
+                stride = 1),
+            Conv1D_x2_Max_block(
+                in_channels = 433, 
+                out_channels = 436, 
+                kernel_size = 3,
+                maxpool_size = 2,
+                stride = 1),
+            Conv1D_x2_Max_block(
+                in_channels = 436, 
+                out_channels = 52, 
+                kernel_size = 3,
+                maxpool_size = 2,
+                stride = 1),
+            Conv1D_x2_Max_block(
+                in_channels = 52, 
+                out_channels = 163, 
+                kernel_size = 3,
+                maxpool_size = 2,
+                stride = 1),
+            Conv1D_x2_Max_block(
+                in_channels = 163, 
+                out_channels = 400, 
+                kernel_size = 3,
+                maxpool_size = 2,
+                stride = 1),
+            Conv1D_x2_Max_block(
+                in_channels = 400, 
+                out_channels = 294, 
+                kernel_size = 3,
+                maxpool_size = 2,
+                stride = 1)
+        )
         
-#     def forward(self, tensor_list):
-#         y, g, s, w = tensor_list
-#         s_out = self.s_network(s)
-#         s_pred = self.s_pred(s_out)
-#         return s_pred, s_out
+        self.w_flatten =nn.Flatten()
+
+        self.w_pred =nn.Sequential(
+            nn.Linear(65856, 1)
+        )
+        
+    def forward(self, tensor_list):
+        y, g, s, w = tensor_list
+        w_out = self.w_network(w)
+        w_out = self.w_flatten(w_out)
+        w_pred = self.w_pred(w_out)
+        return w_pred, w_out
+
+DNNW = torch.load('../nbs_artifacts/02.12_g2fc_benchmark_DNNCO_W/dnnco-w.pt')
+```
+
+```{python}
+# Now freeze layers to be extra sure they are not updated
+for param in DNNG.parameters():
+    param.requires_grad = False
     
-# # [e.shape for e in DNNCO_S().to(device)(g_idx, s_idx, w_idx)]
-```
-
-```{python}
-# subnet = 's'                                                         # 0. Update
-# lr, beta1, beta2, batch_size, max_epoch = adam_params[subnet]
-
-# model = DNNCO_S().to(device)
-# LSUV_(model, data = next(iter(training_dataloader)) )
-```
-
-```{python}
-# DNNS = plDNNCO_subnet(model)                          # 1. Update
-# optimizer = DNNS.configure_optimizers(lr = lr, betas=(beta1, beta2)) # 2. Update
-
-# logger = TensorBoardLogger("tb_logs", name="dnnco-s")                # 3. Update
-# trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
-
-# trainer.fit(model=DNNS, train_dataloaders=training_dataloader)       # 4. Update
-```
-
-```{python}
-# class DNNCO_W(nn.Module):
-#     def __init__(self):
-#         super(DNNCO_W, self).__init__()  
-        
-#         self.w_network =nn.Sequential(
-#             Conv1D_x2_Max_block(
-#                 in_channels = 16, 
-#                 out_channels = 433, 
-#                 kernel_size = 3,
-#                 maxpool_size = 2,
-#                 stride = 1),
-#             Conv1D_x2_Max_block(
-#                 in_channels = 433, 
-#                 out_channels = 436, 
-#                 kernel_size = 3,
-#                 maxpool_size = 2,
-#                 stride = 1),
-#             Conv1D_x2_Max_block(
-#                 in_channels = 436, 
-#                 out_channels = 52, 
-#                 kernel_size = 3,
-#                 maxpool_size = 2,
-#                 stride = 1),
-#             Conv1D_x2_Max_block(
-#                 in_channels = 52, 
-#                 out_channels = 163, 
-#                 kernel_size = 3,
-#                 maxpool_size = 2,
-#                 stride = 1),
-#             Conv1D_x2_Max_block(
-#                 in_channels = 163, 
-#                 out_channels = 400, 
-#                 kernel_size = 3,
-#                 maxpool_size = 2,
-#                 stride = 1),
-#             Conv1D_x2_Max_block(
-#                 in_channels = 400, 
-#                 out_channels = 294, 
-#                 kernel_size = 3,
-#                 maxpool_size = 2,
-#                 stride = 1)
-#         )
-        
-#         self.w_flatten =nn.Flatten()
-
-#         self.w_pred =nn.Sequential(
-#             nn.Linear(65856, 1)
-#         )
-        
-#     def forward(self, tensor_list):
-#         y, g, s, w = tensor_list
-#         w_out = self.w_network(w)
-#         w_out = self.w_flatten(w_out)
-#         w_pred = self.w_pred(w_out)
-#         return w_pred, w_out
+for param in DNNS.parameters():
+    param.requires_grad = False
     
-# # [e.shape for e in DNNCO_W().to(device)(g_idx, s_idx, w_idx)]
-```
-
-```{python}
-subnet = 'w'                                                         # 0. Update
-lr, beta1, beta2, batch_size, max_epoch = adam_params[subnet]
-
-model = DNNCO_W().to(device)
-LSUV_(model, data = next(iter(training_dataloader)) )
-```
-
-```{python}
-DNNW = plDNNCO_subnet(model)                          # 1. Update
-optimizer = DNNW.configure_optimizers(lr = lr, betas=(beta1, beta2)) # 2. Update
-
-logger = TensorBoardLogger("tb_logs", name="dnnco-w")                # 3. Update
-trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
-
-trainer.fit(model=DNNW, train_dataloaders=training_dataloader)       # 4. Update
-```
-
-```{python}
-# torch.save(DNNG.mod, cache_path+'dnnco-w'+'.pt')
-```
-
-
-```{python}
-# torch.load('../nbs_artifacts/02.10_g2fc_benchmark_DNNCO_G/dnnco-g-lsuv.pt')
-# torch.load('../nbs_artifacts/02.11')
-# torch.load('../nbs_artifacts/02.12')
+for param in DNNW.parameters():
+    param.requires_grad = False
 ```
 
 ```{python}
@@ -645,7 +483,8 @@ class DNNCO_X(nn.Module):
             Linear_block(in_size= 44,    out_size= 1,   drop_pr= 0.0)
         )  
         
-    def forward(self, g, s, w):        
+    def forward(self, data):
+        g, s, w = data
         x_pred = self.x_network(torch.concat([g, s, w], axis = 1))
         return x_pred, None
     
@@ -671,117 +510,63 @@ class plDNNCO_X(pl.LightningModule):
         y_i, g_i, s_i, w_i = batch
         
         with torch.no_grad():
-            _, g_out = self.Gmod(g_i, s_i, w_i)            
-            _, s_out = self.Smod(g_i, s_i, w_i)            
-            _, w_out = self.Wmod(g_i, s_i, w_i)            
+            _, g_out = self.Gmod(batch)            
+            _, s_out = self.Smod(batch)            
+            _, w_out = self.Wmod(batch)            
         
-        pred, out = self.mod(g_out, s_out, w_out)
+        pred, out = self.mod([g_out, s_out, w_out])
         # print(y_i.shape, pred.shape)
         loss = F.mse_loss(pred, y_i)
         self.log("train_loss", loss)
         return(loss)
     
+    def validation_step(self, batch, batch_idx):
+        y_i, g_i, s_i, w_i = batch
+        
+        with torch.no_grad():
+            _, g_out = self.Gmod(batch)            
+            _, s_out = self.Smod(batch)            
+            _, w_out = self.Wmod(batch)            
+        
+        pred, out = self.mod([g_out, s_out, w_out])
+        # print(y_i.shape, pred.shape)
+        loss = F.mse_loss(pred, y_i)
+        self.log('val_loss', loss)   
+
     def configure_optimizers(self, **kwargs):
         optimizer =  torch.optim.Adam(self.parameters(), **kwargs)
         return optimizer
-    
 ```
 
 ```{python}
-, val_dataloaders=validation_dataloader
-```
-
-
-
-
-```{python}
-# Now freeze layers to be extra sure they are not updated
-for param in DNNG.mod.parameters():
-    param.requires_grad = False
-    
-for param in DNNS.mod.parameters():
-    param.requires_grad = False
-    
-for param in DNNW.mod.parameters():
-    param.requires_grad = False
-```
-
-```{python}
-# DNNS = plDNNCO_subnet(DNNCO_S().to(device))
-# optimizer = DNNS.configure_optimizers()
-# logger = TensorBoardLogger("tb_logs", name="dnnco-sonly")
-# trainer = pl.Trainer(#limit_train_batches=100, 
-#                      max_epochs=10, logger=logger)
-# trainer.fit(model=DNNS, train_dataloaders=training_dataloader)
-```
-
-```{python}
-# DNNW = plDNNCO_subnet(DNNCO_W().to(device))
-# optimizer = DNNW.configure_optimizers()
-# logger = TensorBoardLogger("tb_logs", name="dnnco-wonly")
-# trainer = pl.Trainer(#limit_train_batches=100, 
-#                      max_epochs=10, logger=logger)
-# trainer.fit(model=DNNW, train_dataloaders=training_dataloader)
-```
-
-```{python}
-subnet = 'co'                                                        # 0. Update
+subnet = 'co'                                                         # 0. Update
 lr, beta1, beta2, batch_size, max_epoch = adam_params[subnet]
-max_epoch = 2 #FIXME
-training_dataloader = DataLoader(
-    GSWDataset(
-        y = torch.from_numpy(y_cs[train_idx])[:, None].to(torch.float32), #torch.from_numpy(YMat[[0, 1], ]), 
-        G = torch.from_numpy(g_cs).to(torch.float32), 
-        S = torch.from_numpy(s_cs).to(torch.float32),
-        W = torch.from_numpy(w_cs).to(torch.float32),
-        planting = PlantHarvest[:, 0],
-        days_before_planting = 60,
-        days_after_planting = 194,
-        idx_original = torch.from_numpy(np.array(train_idx)),#[:, None],
-        idx_lookup_geno = obs_geno_lookup,
-        idx_lookup_env = obs_env_lookup,
-        device = 'cuda'),
-    batch_size = batch_size,
-    shuffle = True
-)
 
-# DNNW = plDNNCO_subnet(DNNCO_W().to(device))                          # 1. Update
-# optimizer = DNNW.configure_optimizers(lr = lr, betas=(beta1, beta2)) # 2. Update
+model = DNNCO_X().to(device)
 
-# logger = TensorBoardLogger("tb_logs", name="dnnco-w")                # 3. Update
-# trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
+DNNG = DNNG.to(device)
+DNNS = DNNS.to(device)
+DNNW = DNNW.to(device)
 
-# trainer.fit(model=DNNW, train_dataloaders=training_dataloader)       # 4. Update
+y_idx, g_idx, s_idx, w_idx = next(iter(training_dataloader))
+LSUV_(model, [DNNG([y_idx, g_idx, s_idx, w_idx])[1],
+              DNNS([y_idx, g_idx, s_idx, w_idx])[1],
+              DNNW([y_idx, g_idx, s_idx, w_idx])[1]])
+```
+
+```{python}
+DNNX = plDNNCO_X(model, DNNG, DNNS, DNNW)                          # 1. Update
+optimizer = DNNX.configure_optimizers(lr = lr, betas=(beta1, beta2)) # 2. Update
 
 
-DNNX = plDNNCO_X(DNNCO_X().to(device), Gmod = DNNG.mod, Smod = DNNS.mod, Wmod = DNNW.mod)
-optimizer = DNNX.configure_optimizers(lr = lr, betas=(beta1, beta2))
 
-logger = TensorBoardLogger("tb_logs", name="dnnco-x")
+logger = TensorBoardLogger("tb_logs", name="dnnco-x")                # 3. Update
 trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
 
-trainer.fit(model=DNNX, train_dataloaders=training_dataloader)
+trainer.fit(model=DNNX, train_dataloaders=training_dataloader, val_dataloaders=validation_dataloader)       # 4. Update
 ```
 
-
 ```{python}
-DNNX = plDNNCO_X(DNNCO_X().to(device), Gmod = DNNG.mod, Smod = DNNS.mod, Wmod = DNNW.mod)
-optimizer = DNNS.configure_optimizers()
-logger = TensorBoardLogger("tb_logs", name="dnnco-x2")
-trainer = pl.Trainer(#limit_train_batches=100, 
-                     max_epochs=10, logger=logger)
-trainer.fit(model=DNNX, train_dataloaders=training_dataloader)
-```
-
-
-```{python}
-# from lightning.pytorch import Trainer
-
-# logger = TensorBoardLogger("tb_logs", name="dnnco-gonly")
-# # trainer = Trainer(logger=logger)
-# # train the model (hint: here are some helpful Trainer arguments for rapid idea iteration)
-# trainer = pl.Trainer(#limit_train_batches=100, 
-#                      max_epochs=10, logger=logger)
-# trainer.fit(model=DNNG, train_dataloaders=training_dataloader)
+torch.save(DNNX.mod, cache_path+'dnnco-x'+'.pt')
 ```
 

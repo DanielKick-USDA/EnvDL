@@ -1,10 +1,11 @@
 ---
+title: Benchmark DNNCO G Only
 jupyter: python3
 ---
 
-# Benchmark DNNCO G Only
 
 > 
+
 
 ```{python}
 import os, json, re
@@ -416,88 +417,88 @@ class DNNCO_G(nn.Module):
 
 
 ```{python}
-class DNNCO_S(nn.Module):
-    def __init__(self):
-        super(DNNCO_S, self).__init__()    
+# class DNNCO_S(nn.Module):
+#     def __init__(self):
+#         super(DNNCO_S, self).__init__()    
         
-        self.s_network =nn.Sequential(
-            Linear_block(in_size= 23, out_size= 38, drop_pr= 0.148724301),
-            Linear_block(in_size= 38, out_size= 13, drop_pr= 0.276340999),
-            Linear_block(in_size= 13, out_size= 45, drop_pr= 0.005434164),
-            Linear_block(in_size= 45, out_size= 29, drop_pr= 0.173380695),
-            Linear_block(in_size= 29, out_size= 4,  drop_pr= 0.),
-            Linear_block(in_size= 4,  out_size= 4,  drop_pr= 0.),
-            Linear_block(in_size= 4,  out_size= 4,  drop_pr= 0.)
-        )  
-        self.s_pred =nn.Sequential(
-            nn.Linear(4, 1)
-        ) 
+#         self.s_network =nn.Sequential(
+#             Linear_block(in_size= 23, out_size= 38, drop_pr= 0.148724301),
+#             Linear_block(in_size= 38, out_size= 13, drop_pr= 0.276340999),
+#             Linear_block(in_size= 13, out_size= 45, drop_pr= 0.005434164),
+#             Linear_block(in_size= 45, out_size= 29, drop_pr= 0.173380695),
+#             Linear_block(in_size= 29, out_size= 4,  drop_pr= 0.),
+#             Linear_block(in_size= 4,  out_size= 4,  drop_pr= 0.),
+#             Linear_block(in_size= 4,  out_size= 4,  drop_pr= 0.)
+#         )  
+#         self.s_pred =nn.Sequential(
+#             nn.Linear(4, 1)
+#         ) 
         
-    def forward(self, g, s, w):
-        s_out = self.s_network(s)
-        s_pred = self.s_pred(s_out)
-        return s_pred, s_out
+#     def forward(self, g, s, w):
+#         s_out = self.s_network(s)
+#         s_pred = self.s_pred(s_out)
+#         return s_pred, s_out
     
-# [e.shape for e in DNNCO_S().to(device)(g_idx, s_idx, w_idx)]
+# # [e.shape for e in DNNCO_S().to(device)(g_idx, s_idx, w_idx)]
 ```
 
 ```{python}
-class DNNCO_W(nn.Module):
-    def __init__(self):
-        super(DNNCO_W, self).__init__()  
+# class DNNCO_W(nn.Module):
+#     def __init__(self):
+#         super(DNNCO_W, self).__init__()  
         
-        self.w_network =nn.Sequential(
-            Conv1D_x2_Max_block(
-                in_channels = 16, 
-                out_channels = 433, 
-                kernel_size = 3,
-                maxpool_size = 2,
-                stride = 1),
-            Conv1D_x2_Max_block(
-                in_channels = 433, 
-                out_channels = 436, 
-                kernel_size = 3,
-                maxpool_size = 2,
-                stride = 1),
-            Conv1D_x2_Max_block(
-                in_channels = 436, 
-                out_channels = 52, 
-                kernel_size = 3,
-                maxpool_size = 2,
-                stride = 1),
-            Conv1D_x2_Max_block(
-                in_channels = 52, 
-                out_channels = 163, 
-                kernel_size = 3,
-                maxpool_size = 2,
-                stride = 1),
-            Conv1D_x2_Max_block(
-                in_channels = 163, 
-                out_channels = 400, 
-                kernel_size = 3,
-                maxpool_size = 2,
-                stride = 1),
-            Conv1D_x2_Max_block(
-                in_channels = 400, 
-                out_channels = 294, 
-                kernel_size = 3,
-                maxpool_size = 2,
-                stride = 1)
-        )
+#         self.w_network =nn.Sequential(
+#             Conv1D_x2_Max_block(
+#                 in_channels = 16, 
+#                 out_channels = 433, 
+#                 kernel_size = 3,
+#                 maxpool_size = 2,
+#                 stride = 1),
+#             Conv1D_x2_Max_block(
+#                 in_channels = 433, 
+#                 out_channels = 436, 
+#                 kernel_size = 3,
+#                 maxpool_size = 2,
+#                 stride = 1),
+#             Conv1D_x2_Max_block(
+#                 in_channels = 436, 
+#                 out_channels = 52, 
+#                 kernel_size = 3,
+#                 maxpool_size = 2,
+#                 stride = 1),
+#             Conv1D_x2_Max_block(
+#                 in_channels = 52, 
+#                 out_channels = 163, 
+#                 kernel_size = 3,
+#                 maxpool_size = 2,
+#                 stride = 1),
+#             Conv1D_x2_Max_block(
+#                 in_channels = 163, 
+#                 out_channels = 400, 
+#                 kernel_size = 3,
+#                 maxpool_size = 2,
+#                 stride = 1),
+#             Conv1D_x2_Max_block(
+#                 in_channels = 400, 
+#                 out_channels = 294, 
+#                 kernel_size = 3,
+#                 maxpool_size = 2,
+#                 stride = 1)
+#         )
         
-        self.w_flatten =nn.Flatten()
+#         self.w_flatten =nn.Flatten()
 
-        self.w_pred =nn.Sequential(
-            nn.Linear(65856, 1)
-        )
+#         self.w_pred =nn.Sequential(
+#             nn.Linear(65856, 1)
+#         )
         
-    def forward(self, g, s, w):
-        w_out = self.w_network(w)
-        w_out = self.w_flatten(w_out)
-        w_pred = self.w_pred(w_out)
-        return w_pred, w_out
+#     def forward(self, g, s, w):
+#         w_out = self.w_network(w)
+#         w_out = self.w_flatten(w_out)
+#         w_pred = self.w_pred(w_out)
+#         return w_pred, w_out
     
-# [e.shape for e in DNNCO_W().to(device)(g_idx, s_idx, w_idx)]
+# # [e.shape for e in DNNCO_W().to(device)(g_idx, s_idx, w_idx)]
 ```
 
 ```{python}
@@ -507,27 +508,27 @@ class DNNCO_W(nn.Module):
 ```
 
 ```{python}
-class DNNCO_X(nn.Module):
-    def __init__(self):
-        super(DNNCO_X, self).__init__()  
+# class DNNCO_X(nn.Module):
+#     def __init__(self):
+#         super(DNNCO_X, self).__init__()  
         
-        self.x_network =nn.Sequential(
-            Linear_block(in_size= 65993, out_size= 152, drop_pr= 0.18658661),
-            Linear_block(in_size= 152,   out_size= 207, drop_pr= 0.289893588),
-            Linear_block(in_size= 207,   out_size= 206, drop_pr= 0.004841293),
-            Linear_block(in_size= 206,   out_size= 188, drop_pr= 0.198121953),
-            Linear_block(in_size= 188,   out_size= 44,  drop_pr= 0.243027717),
-            Linear_block(in_size= 44,    out_size= 1,   drop_pr= 0.0)
-        )  
+#         self.x_network =nn.Sequential(
+#             Linear_block(in_size= 65993, out_size= 152, drop_pr= 0.18658661),
+#             Linear_block(in_size= 152,   out_size= 207, drop_pr= 0.289893588),
+#             Linear_block(in_size= 207,   out_size= 206, drop_pr= 0.004841293),
+#             Linear_block(in_size= 206,   out_size= 188, drop_pr= 0.198121953),
+#             Linear_block(in_size= 188,   out_size= 44,  drop_pr= 0.243027717),
+#             Linear_block(in_size= 44,    out_size= 1,   drop_pr= 0.0)
+#         )  
         
-    def forward(self, g, s, w):        
-        x_pred = self.x_network(torch.concat([g, s, w], axis = 1))
-        return x_pred, None
+#     def forward(self, g, s, w):        
+#         x_pred = self.x_network(torch.concat([g, s, w], axis = 1))
+#         return x_pred, None
     
-# DNNCO_X().to(device)(
-#     DNNCO_G().to(device)(g_idx, s_idx, w_idx)[1],
-#     DNNCO_S().to(device)(g_idx, s_idx, w_idx)[1],
-#     DNNCO_W().to(device)(g_idx, s_idx, w_idx)[1])[0].shape   
+# # DNNCO_X().to(device)(
+# #     DNNCO_G().to(device)(g_idx, s_idx, w_idx)[1],
+# #     DNNCO_S().to(device)(g_idx, s_idx, w_idx)[1],
+# #     DNNCO_W().to(device)(g_idx, s_idx, w_idx)[1])[0].shape   
 ```
 
 ```{python}
@@ -578,34 +579,34 @@ class plDNNCO_subnet(pl.LightningModule):
 ```
 
 ```{python}
-# Module for training Interaction networks. 
-# This version uses the subnetworks so it would be good for predicting new data but this could be
-# reformulated to instead use predictions from the subnetworks which would be more preformant.
-class plDNNCO_X(pl.LightningModule):
-    def __init__(self, mod, Gmod, Smod, Wmod):
-        super().__init__()
-        self.mod = mod
-        self.Gmod = Gmod
-        self.Smod = Smod
-        self.Wmod = Wmod
-    def training_step(self, batch, batch_idx):
-        # train loop
-        y_i, g_i, s_i, w_i = batch
+# # Module for training Interaction networks. 
+# # This version uses the subnetworks so it would be good for predicting new data but this could be
+# # reformulated to instead use predictions from the subnetworks which would be more preformant.
+# class plDNNCO_X(pl.LightningModule):
+#     def __init__(self, mod, Gmod, Smod, Wmod):
+#         super().__init__()
+#         self.mod = mod
+#         self.Gmod = Gmod
+#         self.Smod = Smod
+#         self.Wmod = Wmod
+#     def training_step(self, batch, batch_idx):
+#         # train loop
+#         y_i, g_i, s_i, w_i = batch
         
-        with torch.no_grad():
-            _, g_out = self.Gmod(g_i, s_i, w_i)            
-            _, s_out = self.Smod(g_i, s_i, w_i)            
-            _, w_out = self.Wmod(g_i, s_i, w_i)            
+#         with torch.no_grad():
+#             _, g_out = self.Gmod(g_i, s_i, w_i)            
+#             _, s_out = self.Smod(g_i, s_i, w_i)            
+#             _, w_out = self.Wmod(g_i, s_i, w_i)            
         
-        pred, out = self.mod(g_out, s_out, w_out)
-        # print(y_i.shape, pred.shape)
-        loss = F.mse_loss(pred, y_i)
-        self.log("train_loss", loss)
-        return(loss)
+#         pred, out = self.mod(g_out, s_out, w_out)
+#         # print(y_i.shape, pred.shape)
+#         loss = F.mse_loss(pred, y_i)
+#         self.log("train_loss", loss)
+#         return(loss)
     
-    def configure_optimizers(self, **kwargs):
-        optimizer =  torch.optim.Adam(self.parameters(), **kwargs)
-        return optimizer
+#     def configure_optimizers(self, **kwargs):
+#         optimizer =  torch.optim.Adam(self.parameters(), **kwargs)
+#         return optimizer
     
 ```
 
@@ -884,7 +885,7 @@ class plDNNCO_subnet(pl.LightningModule):
 DNNG = plDNNCO_subnet(model)                          # 1. Update
 optimizer = DNNG.configure_optimizers(lr = lr, betas=(beta1, beta2)) # 2. Update
 
-logger = TensorBoardLogger("tb_logs", name="dnnco-g-lsuv")                # 3. Update
+logger = TensorBoardLogger("tb_logs", name="dnnco-g")                # 3. Update
 trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
 
 trainer.fit(model=DNNG, train_dataloaders=training_dataloader, val_dataloaders=validation_dataloader)       # 4. Update
@@ -892,7 +893,7 @@ trainer.fit(model=DNNG, train_dataloaders=training_dataloader, val_dataloaders=v
 
 
 ```{python}
-torch.save(DNNG.mod, cache_path+'dnnco-g-lsuv'+'.pt')
+torch.save(DNNG.mod, cache_path+'dnnco-g'+'.pt')
 ```
 
 

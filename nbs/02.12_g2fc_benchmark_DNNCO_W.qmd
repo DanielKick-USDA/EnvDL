@@ -1,10 +1,11 @@
 ---
+title: Benchmark DNNCO W Only
 jupyter: python3
 ---
 
-# Benchmark DNNCO W Only
 
 > 
+
 
 ```{python}
 import os, json, re
@@ -468,6 +469,6 @@ trainer.fit(model=DNNW, train_dataloaders=training_dataloader, val_dataloaders=v
 ```
 
 ```{python}
-torch.save(DNNG.mod, cache_path+'dnnco-w'+'.pt')
+torch.save(DNNW.mod, cache_path+'dnnco-w'+'.pt')
 ```
 
