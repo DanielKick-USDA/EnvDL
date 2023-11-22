@@ -1,4 +1,5 @@
 ---
+title: G only KEGG based network architecture
 jupyter: python3
 ---
 
@@ -9,9 +10,9 @@ jupyter: python3
 # import time; time.sleep( 6 * (60*60))
 ```
 
-# G only KEGG based network architecture
 
 > 
+
 
 ```{python}
 import os, re, json
@@ -719,11 +720,11 @@ class plVNN(pl.LightningModule):
         loss = F.mse_loss(pred, y_i)
         self.log("train_loss", loss)
         
-        with torch.no_grad():
-            weight_list=[(name, param) for name, param in model.named_parameters() if name.split('.')[-1] == 'weight']
-            for l in weight_list:
-                self.log(("train_mean"+l[0]), l[1].mean())
-                self.log(("train_std"+l[0]), l[1].std())        
+#         with torch.no_grad():
+#             weight_list=[(name, param) for name, param in model.named_parameters() if name.split('.')[-1] == 'weight']
+#             for l in weight_list:
+#                 self.log(("train_mean"+l[0]), l[1].mean())
+#                 self.log(("train_std"+l[0]), l[1].std())        
         return(loss)
         
     def validation_step(self, batch, batch_idx):
@@ -739,7 +740,10 @@ class plVNN(pl.LightningModule):
 ```
 
 ```{python}
-max_epoch = 2
+
+# 2 epochs took 58 minutes so a 3 day weekend would be 
+# 24*3*2=144 epochs
+max_epoch = 150
 ```
 
 ```{python}
@@ -751,6 +755,14 @@ logger = TensorBoardLogger("tb_logs", name="vnn-02.30")                # 3. Upda
 trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
 
 trainer.fit(model=VNN, train_dataloaders=training_dataloader, val_dataloaders=validation_dataloader)       # 4. Update
+```
+
+```{python}
+torch.save(VNN.mod, cache_path+'vnn'+'.pt')
+```
+
+```{python}
+torch.save(VNN, cache_path+'vnn'+'.pt')
 ```
 
 
