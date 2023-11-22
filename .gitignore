@@ -3,6 +3,9 @@
 /nbs/data
 /nbs/*.csv
 /nbs/tb_logs/*
+/nbs/lightning_logs/*
+/nbs/rmme_mnist/*
+
 
 # From the project structure: -------------------------------------------------
 /data
