@@ -101,82 +101,82 @@ ensure_dir_path_exists(dir_path = cache_path)
 ### Soil and Management ("Static" in season)
 
 ```{python}
-load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
+# load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
 
-# #                            mgmtMatNames.npy
-# mgmtMat = np.load(load_from+'mgmtMat.npy')
-SMat = np.load(load_from+'SMat.npy')
+# # #                            mgmtMatNames.npy
+# # mgmtMat = np.load(load_from+'mgmtMat.npy')
+# SMat = np.load(load_from+'SMat.npy')
 ```
 
 ### Weather (Variable in season)
 
 ```{python}
-load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
+# load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
 
-np.load(load_from+'PlantHarvestNames.npy')
-PlantHarvest = np.load(load_from+'PlantHarvest.npy')
+# np.load(load_from+'PlantHarvestNames.npy')
+# PlantHarvest = np.load(load_from+'PlantHarvest.npy')
 
-WMat = np.load(load_from+'WMat.npy')
-WMatNames = np.load(load_from+'WMatNames.npy')
+# WMat = np.load(load_from+'WMat.npy')
+# WMatNames = np.load(load_from+'WMatNames.npy')
 
-WMat_hilb = np.load(load_from+'WMat_hilb.npy')
+# WMat_hilb = np.load(load_from+'WMat_hilb.npy')
 ```
 
 ### Response and lookup
 
 ```{python}
-load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
-phno_geno = pd.read_csv(load_from+'phno_geno.csv')
-phno = phno_geno
+# load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
+# phno_geno = pd.read_csv(load_from+'phno_geno.csv')
+# phno = phno_geno
 
-obs_geno_lookup = np.load(load_from+'obs_geno_lookup.npy') # Phno_Idx  Geno_Idx  Is_Phno_Idx
-obs_env_lookup = np.load(load_from+'obs_env_lookup.npy')   # Phno_Idx  Env_Idx   Is_Phno_Idx
-YMat = np.load(load_from+'YMat.npy')
+# obs_geno_lookup = np.load(load_from+'obs_geno_lookup.npy') # Phno_Idx  Geno_Idx  Is_Phno_Idx
+# obs_env_lookup = np.load(load_from+'obs_env_lookup.npy')   # Phno_Idx  Env_Idx   Is_Phno_Idx
+# YMat = np.load(load_from+'YMat.npy')
 ```
 
 ## Demo retrieval
 
 ```{python}
-# Indexes
-idx = 0
+# # Indexes
+# idx = 0
 
-geno_idx = obs_geno_lookup[idx, 1]
-env_idx = obs_env_lookup[idx, 1]
+# geno_idx = obs_geno_lookup[idx, 1]
+# env_idx = obs_env_lookup[idx, 1]
 ```
 
 ```{python}
-# Response
-YMat[idx]
+# # Response
+# YMat[idx]
 ```
 
 ```{python}
-# Weather (plant in ground) ------------------------------------------------------------------------
-# generate planting information
-## Basic tensor
-WPlant = np.zeros(365)
-WPlant[PlantHarvest[idx, 0]:PlantHarvest[idx, 1]] = 1
+# # Weather (plant in ground) ------------------------------------------------------------------------
+# # generate planting information
+# ## Basic tensor
+# WPlant = np.zeros(365)
+# WPlant[PlantHarvest[idx, 0]:PlantHarvest[idx, 1]] = 1
 
-## Hilbert
-WPlant_hilb = np_3d_to_hilbert(WPlant[None, :, None])
-WPlant_hilb = WPlant_hilb.squeeze(axis = 3)
-WPlant_hilb[np.isnan(WPlant_hilb)] = 0
-# px.imshow(WPlant_hilb.squeeze())
-# compare with
-# px.imshow(WMat_hilb[env_idx][8, :, :])
+# ## Hilbert
+# WPlant_hilb = np_3d_to_hilbert(WPlant[None, :, None])
+# WPlant_hilb = WPlant_hilb.squeeze(axis = 3)
+# WPlant_hilb[np.isnan(WPlant_hilb)] = 0
+# # px.imshow(WPlant_hilb.squeeze())
+# # compare with
+# # px.imshow(WMat_hilb[env_idx][8, :, :])
 ```
 
 ```{python}
-# Weather (all) ------------------------------------------------------------------------------------
-## Basic tensor
-np.concatenate([WMat[env_idx], WPlant[None, :]], axis = 0).shape
-## Hilbert
-np.concatenate([WMat_hilb[env_idx], WPlant_hilb], axis = 0).shape
+# # Weather (all) ------------------------------------------------------------------------------------
+# ## Basic tensor
+# np.concatenate([WMat[env_idx], WPlant[None, :]], axis = 0).shape
+# ## Hilbert
+# np.concatenate([WMat_hilb[env_idx], WPlant_hilb], axis = 0).shape
 ```
 
 
 ```{python}
-# Soil
-SMat[env_idx]
+# # Soil
+# SMat[env_idx]
 ```
 
 ```{python}
@@ -205,7 +205,7 @@ SMat[env_idx]
 
 
 
-## Setup Autoencoder Networks
+# Setup Autoencoder Networks
 
 ### Reference Weather Info
 based on 01.30_g2fc_W_only, 99.99
@@ -340,7 +340,9 @@ if False:
     # sigma is not fixed, but that's okay. I'll just end up over sampling less plausable combinations
     px.scatter(x = PlantHarvest[:, 0], 
               y = (fm.predict(X) - y))
-    
+```
+
+```{python}
 # Propose plausable plant harvest
 def propose_plantharvest(
     first_doy = 60,
@@ -513,9 +515,7 @@ px.imshow(np.concatenate([
 ))
 ```
 
-# Break from 99.99
-
-## Setup Training Data
+# Setup Training Data
 
 ```{python}
 def _setup_usa_grid_tensor():
@@ -644,6 +644,7 @@ for i in range(obs_total):
 ```{python}
 # n_sites = 1000
 # mask = [True if i < (42*n_sites) else False for i in range(usaMat.shape[0])]
+mask = usaMatMetadata[:, 2] < 2013
 
 training_metadata = usaMatMetadata[mask, ]
 
@@ -670,7 +671,9 @@ exporatory_dataloader_hilb = DataLoader(
     shuffle = True)
 ```
 
-### Fitting Dense vae
+# Setup VAE Classes
+
+## Fitting Dense vae
 
 ```{python}
 # TODO, move this to a module
@@ -802,8 +805,8 @@ class FcEncoder(nn.Module):
             x = mod(x)
         return(x)
     
-x = next(iter(training_dataloader))[0]
-vae_en = FcEncoder(input_shape = next(iter(training_dataloader))[0].shape, parameterization=params ).to('cuda')
+x = next(iter(exporatory_dataloader))[0]
+vae_en = FcEncoder(input_shape = next(iter(exporatory_dataloader))[0].shape, parameterization=params ).to('cuda')
 res = vae_en(x)
 res.shape
 ```
@@ -907,7 +910,7 @@ class FcDecoder(nn.Module):
         x = x.reshape([-1]+list(self.output_shape)[1:])
         return(x)
                 
-vae_dc = FcDecoder(output_shape= next(iter(training_dataloader))[0].shape, parameterization=reversed_params) .to('cuda')
+vae_dc = FcDecoder(output_shape= next(iter(exporatory_dataloader))[0].shape, parameterization=reversed_params) .to('cuda')
 vae_dc(res).shape, vae_dc(res2).shape
 ```
 
@@ -920,7 +923,7 @@ tmp
 ```{python}
 # layer_sizes = [4096, 2048, 1024, 512, 256, 128, 64]
 layer_sizes = [#4096, 2048, 1024, 
-    512, 256, 128, 64]
+    512, 256]
 layer_drops = [0.1 for e in layer_sizes]
 
 num_layers = len(layer_sizes)
@@ -938,23 +941,22 @@ reversed_params =  _reverse_vae_fc_params(params)
 ```
 
 ```{python}
-latent_dims = 32
-latent_dims = 32*4
+# latent_dims = 256
 
-# vae_en   = FcEncoder(input_shape = next(iter(training_dataloader)).shape )
-vae_en = FcEncoder(input_shape = next(iter(training_dataloader))[0].shape, parameterization=params ).to('cuda')
-vae_rp   = vaeReparam(vae_en.output_shape_flat[1], latent_dims)
-vae_samp = vaeSample()
-vae_ex   = vaeExpand(latent_dims, vae_en.output_shape_flat[1])
-# vae_dc   = FcDecoder(output_shape= next(iter(training_dataloader)).shape )
-vae_dc = FcDecoder(output_shape= next(iter(training_dataloader))[0].shape, parameterization=reversed_params) .to('cuda')
+# # vae_en   = FcEncoder(input_shape = next(iter(training_dataloader)).shape )
+# vae_en = FcEncoder(input_shape = next(iter(exporatory_dataloader))[0].shape, parameterization=params ).to('cuda')
+# vae_rp   = vaeReparam(vae_en.output_shape_flat[1], latent_dims)
+# vae_samp = vaeSample()
+# vae_ex   = vaeExpand(latent_dims, vae_en.output_shape_flat[1])
+# # vae_dc   = FcDecoder(output_shape= next(iter(training_dataloader)).shape )
+# vae_dc = FcDecoder(output_shape= next(iter(exporatory_dataloader))[0].shape, parameterization=reversed_params) .to('cuda')
 
 
-vae_en = vae_en.to('cuda')
-vae_rp = vae_rp.to('cuda')
-vae_samp = vae_samp.to('cuda')
-vae_ex = vae_ex.to('cuda')
-vae_dc = vae_dc.to('cuda')
+# vae_en = vae_en.to('cuda')
+# vae_rp = vae_rp.to('cuda')
+# vae_samp = vae_samp.to('cuda')
+# vae_ex = vae_ex.to('cuda')
+# vae_dc = vae_dc.to('cuda')
 ```
 
 ```{python}
@@ -1003,93 +1005,92 @@ class hWthrVAE(pl.LightningModule):
 ```
 
 ```{python}
-test_vae = hWthrVAE(
-    enc= vae_en,
-    rpm= vae_rp,
-    smp= vae_samp,
-    ex = vae_ex,
-    dcd= vae_dc
-)#.to('cuda')
+# max_epoch = 20
+# logger = TensorBoardLogger("tb_vae_logs", name="fcn-e256-l2-ch512-256")
 
-optimizer = test_vae.configure_optimizers()
+# test_vae = hWthrVAE(
+#     enc= vae_en,
+#     rpm= vae_rp,
+#     smp= vae_samp,
+#     ex = vae_ex,
+#     dcd= vae_dc
+# )#.to('cuda')
 
-max_epoch = 2
-trainer = pl.Trainer(max_epochs=max_epoch)
+# optimizer = test_vae.configure_optimizers()
 
-trainer.fit(
-    model=test_vae, 
-    train_dataloaders=training_dataloader
-    )
+# trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
+
+# trainer.fit(model=test_vae, train_dataloaders=exporatory_dataloader)
 ```
 
 #### Check Predictions
 
 ```{python}
-xs = next(iter(training_dataloader))[0]
-xs = xs.detach().cpu()
-xhats = trainer.model(xs).detach().cpu()
+# xs = next(iter(exporatory_dataloader))[0]
+# xs = xs.detach().cpu()
+# xhats = trainer.model(xs).detach().cpu()
 ```
 
 ```{python}
-px.imshow(
-np.concatenate([
-    reverse_cs(torch.Tensor.numpy(xs[0])[0:16, ], cs_dict['histW']),
-    torch.Tensor.numpy(xs[0])[-1, ][None, ]
-    ], axis = 0)
-)
+# px.imshow(
+# np.concatenate([
+#     reverse_cs(torch.Tensor.numpy(xs[0])[0:16, ], cs_dict['histW']),
+#     torch.Tensor.numpy(xs[0])[-1, ][None, ]
+#     ], axis = 0)
+# )
 ```
 
 ```{python}
-px.imshow(
-np.concatenate([
-    reverse_cs(torch.Tensor.numpy(xhats[0])[0:16, ], cs_dict['histW']),
-    torch.Tensor.numpy(xhats[0])[-1, ][None, ]
-    ], axis = 0)
-)
+# px.imshow(
+# np.concatenate([
+#     reverse_cs(torch.Tensor.numpy(xhats[0])[0:16, ], cs_dict['histW']),
+#     torch.Tensor.numpy(xhats[0])[-1, ][None, ]
+#     ], axis = 0)
+# )
 ```
 
 ```{python}
-px.imshow(xhats[0]-xs[0])
+# px.imshow(xhats[0]-xs[0])
 ```
 
 #### Visualize Embeddings
 
 ```{python}
-xs = next(iter(training_dataloader))[0]
-xs = xs.detach().cpu()
-xhats = trainer.model(xs).detach().cpu()
+# xs = next(iter(exporatory_dataloader))[0]
+# xs = xs.detach().cpu()
+# xhats = trainer.model(xs).detach().cpu()
 ```
 
 ```{python}
-embeddings = []
+# embeddings = []
 
-for i, x in enumerate(training_dataloader):
-    with torch.no_grad():
-        embeddings += [trainer.model.embed(x[0].to('cpu'))]
+# for i, x in enumerate(exporatory_dataloader):
+#     with torch.no_grad():
+#         embeddings += [trainer.model.embed(x[0].to('cpu'))]
 
-embeddings = torch.concat(embeddings, axis = 0)
+# embeddings = torch.concat(embeddings, axis = 0)
 ```
 
 ```{python}
-X_embedded = TSNE(n_components=2, learning_rate='auto', init='random', perplexity=3).fit_transform(embeddings)
+# X_embedded = TSNE(n_components=2, learning_rate='auto', init='random', perplexity=3).fit_transform(embeddings)
 ```
 
 ```{python}
-temp = pd.concat([pd.DataFrame(training_metadata, columns=['Longitude', 'Latitude', 'Year']), 
-                  pd.DataFrame(X_embedded, columns = ['TSNE1', 'TSNE2'])], axis = 1)
+# temp = pd.concat([pd.DataFrame(training_metadata, columns=['Longitude', 'Latitude', 'Year']), 
+#                   pd.DataFrame(X_embedded, columns = ['TSNE1', 'TSNE2'])], axis = 1)
 
-temp['LatLon']=temp['Latitude'].astype(str)+'_'+temp['Longitude'].astype(str)
+# temp['LatLon']=temp['Latitude'].astype(str)+'_'+temp['Longitude'].astype(str)
 ```
 
 ```{python}
-px.scatter(temp, x = 'Longitude', y = 'Latitude')
+# px.scatter(temp, x = 'Longitude', y = 'Latitude')
 ```
 
 ```{python}
-px.scatter(temp, x = 'TSNE1', y = 'TSNE2', color='LatLon')
+# px.scatter(temp, x = 'TSNE1', y = 'TSNE2', color='LatLon')
 ```
 
-### Fitting Conv1d model
+## Fitting Conv1d model
 
 ```{python}
 # TODO move to module and replace below version of this class
@@ -1173,14 +1174,15 @@ class ResConv1dEncoder(nn.Module):
             # print(x.shape)
         return(x)
     
-x = next(iter(training_dataloader))[0]
-vae_en = ResConv1dEncoder(input_shape = next(iter(training_dataloader))[0].shape ).to('cuda')
+x = next(iter(exporatory_dataloader))[0]
+vae_en = ResConv1dEncoder(input_shape = next(iter(exporatory_dataloader))[0].shape ).to('cuda')
 res = vae_en(x)
 vae_en.intermediate_shapes, res.shape
+
 ```
 
 ```{python}
-next(iter(training_dataloader))[0].shape
+next(iter(exporatory_dataloader))[0].shape
 ```
 
 ```{python}
@@ -1250,48 +1252,303 @@ vae_dc(res).shape
 ```
 
 ```{python}
-latent_dims = 256
+# latent_dims = 256
 
-vae_en   = ResConv1dEncoder(input_shape = next(iter(training_dataloader))[0].shape )
-vae_rp   = vaeReparam(vae_en.output_shape_flat[1], latent_dims)
-vae_samp = vaeSample()
-vae_ex   = vaeExpand(latent_dims, vae_en.output_shape_flat[1])
-vae_dc   = ResConv1dDecoder(enc_intermediate_shapes= vae_en.intermediate_shapes.copy())
+# vae_en   = ResConv1dEncoder(input_shape = next(iter(exporatory_dataloader))[0].shape )
+# vae_rp   = vaeReparam(vae_en.output_shape_flat[1], latent_dims)
+# vae_samp = vaeSample()
+# vae_ex   = vaeExpand(latent_dims, vae_en.output_shape_flat[1])
+# vae_dc   = ResConv1dDecoder(enc_intermediate_shapes= vae_en.intermediate_shapes.copy())
 
-vae_en = vae_en.to('cuda')
-vae_rp = vae_rp.to('cuda')
-vae_samp = vae_samp.to('cuda')
-vae_ex = vae_ex.to('cuda')
-vae_dc = vae_dc.to('cuda')
+# vae_en = vae_en.to('cuda')
+# vae_rp = vae_rp.to('cuda')
+# vae_samp = vae_samp.to('cuda')
+# vae_ex = vae_ex.to('cuda')
+# vae_dc = vae_dc.to('cuda')
 ```
 
 ```{python}
-max_epoch = 2
-logger = TensorBoardLogger("tb_vae_logs", name="conv1")
+# max_epoch = 20
 
-test_vae = hWthrVAE(
-    enc= vae_en,
-    rpm= vae_rp,
-    smp= vae_samp,
-    ex = vae_ex,
-    dcd= vae_dc
-)#.to('cuda')
+# logger = TensorBoardLogger("tb_vae_logs", name="conv1-e256")
 
-optimizer = test_vae.configure_optimizers()
+# test_vae = hWthrVAE(
+#     enc= vae_en,
+#     rpm= vae_rp,
+#     smp= vae_samp,
+#     ex = vae_ex,
+#     dcd= vae_dc
+# )#.to('cuda')
 
-trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
+# optimizer = test_vae.configure_optimizers()
 
-trainer.fit(model=test_vae, train_dataloaders=training_dataloader)
+# trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
+
+# trainer.fit(model=test_vae, train_dataloaders=exporatory_dataloader)
 ```
 
-### Fitting LSTM model
+```{python}
+# # How much better is a bigger latent space?
+# latent_dims = 512
+
+# vae_en   = ResConv1dEncoder(input_shape = next(iter(exporatory_dataloader))[0].shape )
+# vae_rp   = vaeReparam(vae_en.output_shape_flat[1], latent_dims)
+# vae_samp = vaeSample()
+# vae_ex   = vaeExpand(latent_dims, vae_en.output_shape_flat[1])
+# vae_dc   = ResConv1dDecoder(enc_intermediate_shapes= vae_en.intermediate_shapes.copy())
+
+# vae_en = vae_en.to('cuda')
+# vae_rp = vae_rp.to('cuda')
+# vae_samp = vae_samp.to('cuda')
+# vae_ex = vae_ex.to('cuda')
+# vae_dc = vae_dc.to('cuda')
+
+
+# max_epoch = 20
+
+# logger = TensorBoardLogger("tb_vae_logs", name="conv1-e512")
+
+# test_vae = hWthrVAE(
+#     enc= vae_en,
+#     rpm= vae_rp,
+#     smp= vae_samp,
+#     ex = vae_ex,
+#     dcd= vae_dc
+# )#.to('cuda')
+
+# optimizer = test_vae.configure_optimizers()
+
+# trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
+
+# trainer.fit(model=test_vae, train_dataloaders=exporatory_dataloader)
+```
+
+```{python}
+# What about a bigger latent space and a larger batch size? Both seem to help.
+
+mask = usaMatMetadata[:, 2] < 2013
+
+training_metadata = usaMatMetadata[mask, ]
+
+tmp = usaMat[mask, :, :]
+cs_dict = {'histW':calc_cs(tmp)}
+tmp = apply_cs(tmp, cs_dict['histW'])
+
+exporatory_dataloader = DataLoader(
+    SimBigDataset(
+        lookup_obs= torch.linspace(0, tmp.shape[0], tmp.shape[0])[:, None].to('cuda'), 
+        W = torch.from_numpy(tmp).to('cuda'), 
+        W_type = 'raw'),
+    batch_size = 512,
+    shuffle = True)
+```
+
+```{python}
+
+# latent_dims = 512
+
+# vae_en   = ResConv1dEncoder(input_shape = next(iter(exporatory_dataloader))[0].shape )
+# vae_rp   = vaeReparam(vae_en.output_shape_flat[1], latent_dims)
+# vae_samp = vaeSample()
+# vae_ex   = vaeExpand(latent_dims, vae_en.output_shape_flat[1])
+# vae_dc   = ResConv1dDecoder(enc_intermediate_shapes= vae_en.intermediate_shapes.copy())
+
+# vae_en = vae_en.to('cuda')
+# vae_rp = vae_rp.to('cuda')
+# vae_samp = vae_samp.to('cuda')
+# vae_ex = vae_ex.to('cuda')
+# vae_dc = vae_dc.to('cuda')
+
+
+# max_epoch = 100
+
+# logger = TensorBoardLogger("tb_vae_logs", name="conv1-e512-b512")
+
+# test_vae = hWthrVAE(
+#     enc= vae_en,
+#     rpm= vae_rp,
+#     smp= vae_samp,
+#     ex = vae_ex,
+#     dcd= vae_dc
+# )#.to('cuda')
+
+# optimizer = test_vae.configure_optimizers()
+
+# trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
+
+# trainer.fit(model=test_vae, train_dataloaders=exporatory_dataloader)
+```
+
+```{python}
+# what about an even deeper network? 
+# I tried this with standard res blocks and they crashed. I'm trying it using fixup blocks. I read through the paper and found this helpful implementation through papers with code
+# https://github.com/hongyi-zhang/Fixup/blob/master/cifar/models/fixup_resnet_cifar.py#L106
+```
+
+```{python}
+class ResBlockConv1Fixup(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias = False, downsample = None):
+        super(ResBlockConv1Fixup, self).__init__()
+        self.l1_conv  = nn.Conv1d(in_channels= in_channels,
+                                  out_channels= out_channels,
+                                  kernel_size= kernel_size,
+                                  stride= stride,
+                                  padding= padding,
+                                  bias= bias)
+        self.l1_bias1 = nn.Parameter(torch.zeros(1))
+        self.l1_bias2 = nn.Parameter(torch.zeros(1))
+        
+        self.l2_conv  = nn.Conv1d(in_channels= out_channels,
+                                  out_channels= out_channels,
+                                  kernel_size= kernel_size,
+                                  stride= 1,
+                                  padding= padding,
+                                  bias= bias)
+        self.l2_bias1 = nn.Parameter(torch.zeros(1))
+        self.l2_bias2 = nn.Parameter(torch.zeros(1))
+        self.l2_scale = nn.Parameter(torch.ones(1))    
+        self.downsample = downsample 
+
+    def forward(self, x):
+        xin = x
+        # long path
+        out =    self.l1_conv(  x + self.l1_bias1) 
+        # print(xin.shape, out.shape)
+        out =         F.relu( out + self.l1_bias2)
+        # print(xin.shape, out.shape)
+        out =    self.l2_conv(out + self.l2_bias1)
+        # print(xin.shape, out.shape)
+        out = out * self.l2_scale + self.l2_bias2
+        # short path
+        if self.downsample is not None:
+            xin = self.downsample(x+self.l1_bias1)
+            xin = torch.cat((xin, torch.zeros_like(xin)), 1)
+        
+        # print(xin.shape, out.shape)
+        out = F.relu(out + xin)
+
+        return(out)
+    
+class ResNetConv1Fixup(nn.Module):
+    def _make_layer_block(self, block, out_channels, num_blocks, stride = 1):
+        downsample = None
+        if stride != 1: 
+            downsample = nn.AvgPool1d(1, stride = stride)
+
+        layer_list = []
+        layer_list.append(block(self.in_channels, out_channels, stride = stride, downsample = downsample))
+        # update to the new number of channels
+        self.in_channels = out_channels
+        for _ in range(1, num_blocks):
+            layer_list.append(block(out_channels, out_channels))
+
+        return nn.Sequential(*layer_list)
+
+
+    def __init__(self, block: nn.Module, layers: list, outputs: int = 1):
+        super(ResNetConv1Fixup, self).__init__()
+        self.num_layers = sum(layers)
+        self.in_channels = 32 # note this is into the layer blocks not in here.
+        self.conv   = nn.Conv1d(in_channels= 17, out_channels= 32, kernel_size=3, stride=1, padding=1, bias = False)
+        self.bias1  = nn.Parameter(torch.zeros(1))
+
+        self.block1 = self._make_layer_block(block, out_channels=32, num_blocks=layers[0], stride= 1) 
+        self.block2 = self._make_layer_block(block, out_channels=64, num_blocks=layers[1], stride= 2) 
+        self.block3 = self._make_layer_block(block, out_channels=128,num_blocks=layers[2], stride= 2) 
+
+        self.avgpool= nn.AdaptiveAvgPool1d((1))
+        self.bias2  = nn.Parameter(torch.zeros(1))
+        self.fc     = nn.Linear(128, outputs)
+
+        for mod in self.modules():
+            if isinstance(mod, ResBlockConv1Fixup):        
+                # original version 
+                # conv_scaling = np.sqrt(2 / (mod.l1_conv.weight.shape[0] * np.prod(mod.l1_conv.weight.shape[2:]))) * self.num_layers ** (-0.5)
+                # remade in pytorch
+                conv_scaling = torch.sqrt(2 / (torch.tensor(mod.l1_conv.weight.shape[0]) * torch.prod(torch.tensor(mod.l1_conv.weight.shape[2:])))) * self.num_layers ** (-0.5)
+                nn.init.normal_(mod.l1_conv.weight, mean = 0, std= conv_scaling)
+                nn.init.constant_(mod.l2_conv.weight, 0)
+            elif isinstance(mod, nn.Linear):
+                nn.init.constant_(mod.weight, 0)
+                nn.init.constant_(mod.bias, 0)
+
+    def forward(self, x):
+        print(x.shape)
+        x = F.relu(self.conv(x) + self.bias1)
+        print(x.shape)
+        x = self.block1(x)
+        print(x.shape)
+        x = self.block2(x)
+        print(x.shape)
+        x = self.block3(x)
+        print(x.shape)
+        x = self.avgpool(x)
+        print(x.shape)
+        x = x.view(x.size(0), -1)
+        print(x.shape)
+        x = self.fc(x + self.bias2)
+        print(x.shape)
+        return x
+
+model = ResNetConv1Fixup(ResBlockConv1Fixup, layers = [3,3,3], outputs=1)
+model(torch.randn([512, 17, 365])).shape
+```
+
+```{python}
+# goal structure for vae
+
+x = torch.randn([512, 17, 384]) # pad by 19 days
+
+mods = nn.ModuleList([
+    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=4, stride=2, padding=1, bias = False),
+    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=4, stride=2, padding=1, bias = False),
+    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=4, stride=2, padding=1, bias = False),
+    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=4, stride=2, padding=1, bias = False),
+    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=4, stride=2, padding=1, bias = False),
+    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=4, stride=2, padding=1, bias = False),
+    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=4, stride=2, padding=1, bias = False),
+
+    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=3, stride=1, padding=1, bias = False),
+
+    torch.nn.Upsample(scale_factor=2), #'nearest', 'linear', 'bilinear', 'bicubic' and 'trilinear'. Default: 'nearest'
+    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=3, stride=1, padding=1, bias = False),
+
+    torch.nn.Upsample(scale_factor=2), 
+    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=3, stride=1, padding=1, bias = False),
+
+    torch.nn.Upsample(scale_factor=2), 
+    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=3, stride=1, padding=1, bias = False),
+
+    torch.nn.Upsample(scale_factor=2), 
+    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=3, stride=1, padding=1, bias = False),
+
+    torch.nn.Upsample(scale_factor=2), 
+    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=3, stride=1, padding=1, bias = False),
+
+    torch.nn.Upsample(scale_factor=2), 
+    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=3, stride=1, padding=1, bias = False),
+
+    torch.nn.Upsample(scale_factor=2), 
+    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=3, stride=1, padding=1, bias = False),
+])
+
+for mod in mods:
+    l = x.shape[-1]
+    x = mod(x)
+    if isinstance(mod, nn.Upsample): pass
+    else: print(f'{x.shape[-1]/l} \t {x.shape[-1]}')
+
+x = x[:, :, 9:-10]
+print(f'{x.shape[-1]/l} \t {x.shape[-1]}')
+```
+
+## Fitting LSTM model
 
 ```{python}
 # Ironing out this class was a bit of a challenge. The key issue here is that the number of layers in the lstm changes the shape of the hidden state, thus chaninging the shape of the embeddings.
 # This is okay if there's only one layer but if there are two then expanding the z matrix results in z*num_layers samples. To fix this I changed the embedding to pass the hidden state through a fc
 # layer reducing the layer dimension to one and on the other side in the expander I increase this back up up to num_layers. The benefit of doing this this way is that the z matrix can still be 
 # repeated to create the [seq, hidden, latent] shaped matrix needed for the input to the decoder. 
-
 
 class LstmEncoder(nn.Module):
     def __init__(
@@ -1322,6 +1579,9 @@ class LstmEncoder(nn.Module):
         new_hidden = (x2, hidden[1])
         return out, new_hidden
 
+```
+
+```{python}
 
 # new version for lstm (removed flattening)
 class LstmReparam(nn.Module):
@@ -1336,6 +1596,9 @@ class LstmReparam(nn.Module):
         log_var = self.fc_log_var(x)
         return([mu, log_var])
     
+```
+
+```{python}
 class vaeSample(nn.Module):
     def __init__(self):
         super(vaeSample, self).__init__()
@@ -1346,7 +1609,9 @@ class vaeSample(nn.Module):
         q = torch.distributions.Normal(mu, std)
         z = q.rsample()
         return p, q, z
+```
 
+```{python}
 
 class LstmExpand(nn.Module):
     def __init__(self, latent_dims, out_dims, num_layers
@@ -1365,9 +1630,10 @@ class LstmExpand(nn.Module):
         res = self.fc_expand_layerdim(res)
         res = einops.rearrange(res, 'b c l -> l b c')
 
-        return res
+        return res        
+```
 
-            
+```{python}
 
 class LstmDecoder(nn.Module):
     def __init__(
@@ -1394,6 +1660,9 @@ class LstmDecoder(nn.Module):
             pred = einops.rearrange(pred, self.rev_einops_str)
         return pred
     
+```
+
+```{python}
 class LstmVae(nn.Module):
     def __init__(self, 
                  in_channels, 
@@ -1484,10 +1753,10 @@ model = LstmVae(
     hidden_channels = 16, 
     latent_channels = 15, 
     num_layers      = 3, 
-    x_shape         = next(iter(training_dataloader))[0].shape,
+    x_shape         = next(iter(exporatory_dataloader))[0].shape,
     einops_str      = 'b c s -> s b c').to('cuda')
 
-model(next(iter(training_dataloader))[0], return_pqz = True)[0].shape
+model(next(iter(exporatory_dataloader))[0], return_pqz = True)[0].shape
 ```
 
 ```{python}
@@ -1552,7 +1821,7 @@ class plVAE(pl.LightningModule):
 ```
 
 ```{python}
-max_epoch = 2
+max_epoch = 5
 logger = TensorBoardLogger("tb_vae_logs", name="lstm-l1-ch17_17_17")
 
 
@@ -1561,7 +1830,7 @@ model = LstmVae(
     hidden_channels = 17, 
     latent_channels = 17, 
     num_layers      = 1, 
-    x_shape         = next(iter(training_dataloader))[0].shape,
+    x_shape         = next(iter(exporatory_dataloader))[0].shape,
     einops_str      = 'b c s -> s b c').to('cuda')
 
 test_vae = plVAE(vae= model)
@@ -1571,11 +1840,11 @@ optimizer = test_vae.configure_optimizers()
 
 trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
 
-trainer.fit(model=test_vae, train_dataloaders=training_dataloader)
+trainer.fit(model=test_vae, train_dataloaders=exporatory_dataloader)
 ```
 
 ```{python}
-max_epoch = 10
+# max_epoch = 10
 logger = TensorBoardLogger("tb_vae_logs", name="lstm-l3-ch17_17_17")
 
 
@@ -1584,7 +1853,7 @@ model = LstmVae(
     hidden_channels = 17, 
     latent_channels = 17, 
     num_layers      = 3, 
-    x_shape         = next(iter(training_dataloader))[0].shape,
+    x_shape         = next(iter(exporatory_dataloader))[0].shape,
     einops_str      = 'b c s -> s b c').to('cuda')
 
 test_vae = plVAE(vae= model)
@@ -1594,11 +1863,11 @@ optimizer = test_vae.configure_optimizers()
 
 trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
 
-trainer.fit(model=test_vae, train_dataloaders=training_dataloader)
+trainer.fit(model=test_vae, train_dataloaders=exporatory_dataloader)
 ```
 
 ```{python}
-max_epoch = 10
+# max_epoch = 10
 logger = TensorBoardLogger("tb_vae_logs", name="lstm-l1-ch17_32_64")
 
 
@@ -1607,7 +1876,7 @@ model = LstmVae(
     hidden_channels = 32, 
     latent_channels = 64, 
     num_layers      = 1, 
-    x_shape         = next(iter(training_dataloader))[0].shape,
+    x_shape         = next(iter(exporatory_dataloader))[0].shape,
     einops_str      = 'b c s -> s b c').to('cuda')
 
 test_vae = plVAE(vae= model)
@@ -1617,88 +1886,112 @@ optimizer = test_vae.configure_optimizers()
 
 trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
 
-trainer.fit(model=test_vae, train_dataloaders=training_dataloader)
+trainer.fit(model=test_vae, train_dataloaders=exporatory_dataloader)
 ```
+
+```{python}
+# max_epoch = 10
+logger = TensorBoardLogger("tb_vae_logs", name="lstm-l1-ch17_128_256")
+
+
+model = LstmVae(
+    in_channels     = 17, 
+    hidden_channels = 128, 
+    latent_channels = 256, 
+    num_layers      = 1, 
+    x_shape         = next(iter(exporatory_dataloader))[0].shape,
+    einops_str      = 'b c s -> s b c').to('cuda')
+
+test_vae = plVAE(vae= model)
+
+optimizer = test_vae.configure_optimizers()
+
+
+trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
+
+trainer.fit(model=test_vae, train_dataloaders=exporatory_dataloader)
+```
+
 
 #### Check Predictions
 
 ```{python}
-xs = next(iter(training_dataloader))[0]
-xs = xs.detach().cpu()
-xhats = trainer.model(xs).detach().cpu()
+# xs = next(iter(exporatory_dataloader))[0]
+# xs = xs.detach().cpu()
+# xhats = trainer.model(xs).detach().cpu()
 ```
 
 ```{python}
-px.imshow(
-np.concatenate([
-    reverse_cs(torch.Tensor.numpy(xs[0])[0:16, ], cs_dict['histW']),
-    torch.Tensor.numpy(xs[0])[-1, ][None, ]
-    ], axis = 0)
-)
+# px.imshow(
+# np.concatenate([
+#     reverse_cs(torch.Tensor.numpy(xs[0])[0:16, ], cs_dict['histW']),
+#     torch.Tensor.numpy(xs[0])[-1, ][None, ]
+#     ], axis = 0)
+# )
 ```
 
 ```{python}
-px.imshow(
-np.concatenate([
-    reverse_cs(torch.Tensor.numpy(xhats[0])[0:16, ], cs_dict['histW']),
-    torch.Tensor.numpy(xhats[0])[-1, ][None, ]
-    ], axis = 0)
-)
+# px.imshow(
+# np.concatenate([
+#     reverse_cs(torch.Tensor.numpy(xhats[0])[0:16, ], cs_dict['histW']),
+#     torch.Tensor.numpy(xhats[0])[-1, ][None, ]
+#     ], axis = 0)
+# )
 ```
 
 ```{python}
-px.imshow(xhats[0]-xs[0])
+# px.imshow(xhats[0]-xs[0])
 ```
 
 ```{python}
-px.line(
-    pd.DataFrame(
-        np.transpose(
-            np.concatenate([
-                reverse_cs(torch.Tensor.numpy(xhats[0])[0:16, ], cs_dict['histW']),
-                torch.Tensor.numpy(xhats[0])[-1, ][None, ]
-                ])), 
-                columns=list(usa_grid_names[2:18])+['Planting']
-                ))
+# px.line(
+#     pd.DataFrame(
+#         np.transpose(
+#             np.concatenate([
+#                 reverse_cs(torch.Tensor.numpy(xhats[0])[0:16, ], cs_dict['histW']),
+#                 torch.Tensor.numpy(xhats[0])[-1, ][None, ]
+#                 ])), 
+#                 columns=list(usa_grid_names[2:18])+['Planting']
+#                 ))
 ```
 
 #### Visualize Embeddings
 
 ```{python}
-embeddings = []
+# embeddings = []
 
-for i, x in enumerate(training_dataloader):
-    with torch.no_grad():
-        embeddings += [trainer.model.vae.encode(x[0].to('cpu'))]
+# for i, x in enumerate(exporatory_dataloader):
+#     with torch.no_grad():
+#         embeddings += [trainer.model.vae.encode(x[0].to('cpu'))]
 
-embeddings = torch.concat(embeddings, axis = 0)
+# embeddings = torch.concat(embeddings, axis = 0)
 ```
 
 ```{python}
-X_embedded = TSNE(n_components=2, learning_rate='auto', init='random', perplexity=3).fit_transform(embeddings)
-# 2.34 to run for full dataset
+# X_embedded = TSNE(n_components=2, learning_rate='auto', init='random', perplexity=3).fit_transform(embeddings)
+# # 2.34 to run for full dataset
 ```
 
 ```{python}
-temp = pd.concat([pd.DataFrame(training_metadata, columns=['Longitude', 'Latitude', 'Year']), 
-                  pd.DataFrame(X_embedded, columns = ['TSNE1', 'TSNE2'])], axis = 1)
+# temp = pd.concat([pd.DataFrame(training_metadata, columns=['Longitude', 'Latitude', 'Year']), 
+#                   pd.DataFrame(X_embedded, columns = ['TSNE1', 'TSNE2'])], axis = 1)
 
-temp['LatLon']=temp['Latitude'].astype(str)+'_'+temp['Longitude'].astype(str)
+# temp['LatLon']=temp['Latitude'].astype(str)+'_'+temp['Longitude'].astype(str)
 ```
 
 ```{python}
-px.scatter(temp, x = 'Longitude', y = 'Latitude')
+# px.scatter(temp, x = 'Longitude', y = 'Latitude')
 ```
 
 ```{python}
-px.scatter(temp, x = 'TSNE1', y = 'TSNE2', 
-        #    color='LatLon'
-           color = 'Year',
-           hover_data=['LatLon', 'Year']
-           )
+# px.scatter(temp, x = 'TSNE1', y = 'TSNE2', 
+#         #    color='LatLon'
+#            color = 'Year',
+#            hover_data=['LatLon', 'Year']
+#            )
 ```
 
-### Fitting Conv2d model
+## Fitting Conv2d model
 
 ```{python}
 # TODO move to module
@@ -1727,12 +2020,9 @@ class ResBlock(nn.Module):
         return out
 ```
 
-```{python}
-training_dataloader = training_dataloader_hilb
-```
 
 ```{python}
-next(iter(training_dataloader))[0].shape
+next(iter(exporatory_dataloader_hilb))[0].shape
 ```
 
 ```{python}
@@ -1777,8 +2067,8 @@ class ResConv2dEncoder(nn.Module):
             # print(x.shape)
         return(x)
     
-x = next(iter(training_dataloader))[0]
-vae_en = ResConv2dEncoder(input_shape = next(iter(training_dataloader))[0].shape ).to('cuda')
+x = next(iter(exporatory_dataloader_hilb))[0]
+vae_en = ResConv2dEncoder(input_shape = next(iter(exporatory_dataloader_hilb))[0].shape ).to('cuda')
 res = vae_en(x)
 vae_en.intermediate_shapes
 ```
@@ -1894,7 +2184,7 @@ vae_dc(res).shape
 ```{python}
 latent_dims = 256
 
-vae_en   = ResConv2dEncoder(input_shape = next(iter(training_dataloader))[0].shape )
+vae_en   = ResConv2dEncoder(input_shape = next(iter(exporatory_dataloader_hilb))[0].shape )
 vae_rp   = vaeReparam(vae_en.output_shape_flat[1], latent_dims)
 vae_samp = vaeSample()
 vae_ex   = vaeExpand(latent_dims, vae_en.output_shape_flat[1])
@@ -1908,7 +2198,7 @@ vae_dc = vae_dc.to('cuda')
 ```
 
 ```{python}
-max_epoch = 10
+# max_epoch = 10
 logger = TensorBoardLogger("tb_vae_logs", name="hilb")
 
 test_vae = hWthrVAE(
@@ -1923,15 +2213,15 @@ optimizer = test_vae.configure_optimizers()
 
 trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
 
-trainer.fit(model=test_vae, train_dataloaders=training_dataloader)
+trainer.fit(model=test_vae, train_dataloaders=exporatory_dataloader_hilb)
 ```
 
 #### Check Predictions
 
 ```{python}
-xs = next(iter(training_dataloader))[0]
-xs = xs.detach().cpu()
+xs = next(iter(exporatory_dataloader_hilb))[0]
 xhats = trainer.model(xs).detach().cpu()
+xs = xs.detach().cpu()
 ```
 
 ```{python}
@@ -1945,27 +2235,28 @@ px.imshow(xhats[0, 8, :, :])
 #### Visualize Embeddings
 
 ```{python}
-embeddings = []
+# embeddings = []
 
-for i, x in enumerate(training_dataloader):
-    with torch.no_grad():
-        embeddings += [trainer.model.embed(x[0].to('cpu'))]
+# for i, x in enumerate(exporatory_dataloader_hilb):
+#     with torch.no_grad():
+#         embeddings += [trainer.model.embed(x[0].to('cpu'))]
 
-embeddings = torch.concat(embeddings, axis = 0)
+# embeddings = torch.concat(embeddings, axis = 0)
 ```
 
 ```{python}
-X_embedded = TSNE(n_components=2, learning_rate='auto', init='random', perplexity=3).fit_transform(embeddings)
+# X_embedded = TSNE(n_components=2, learning_rate='auto', init='random', perplexity=3).fit_transform(embeddings)
 ```
 
 ```{python}
-temp = pd.concat([pd.DataFrame(training_metadata, columns=['Longitude', 'Latitude', 'Year']), 
-                  pd.DataFrame(X_embedded, columns = ['TSNE1', 'TSNE2'])], axis = 1)
+# temp = pd.concat([pd.DataFrame(training_metadata, columns=['Longitude', 'Latitude', 'Year']), 
+#                   pd.DataFrame(X_embedded, columns = ['TSNE1', 'TSNE2'])], axis = 1)
 
-temp['LatLon']=temp['Latitude'].astype(str)+'_'+temp['Longitude'].astype(str)
+# temp['LatLon']=temp['Latitude'].astype(str)+'_'+temp['Longitude'].astype(str)
 ```
 
 ```{python}
-px.scatter(temp, x = 'TSNE1', y = 'TSNE2', color='LatLon')
+# px.scatter(temp, x = 'TSNE1', y = 'TSNE2', color='LatLon')
 ```
+
 
