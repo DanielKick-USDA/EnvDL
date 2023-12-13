@@ -8,47 +8,31 @@ jupyter: python3
 
 
 ```{python}
-import os, json, re
-
 import numpy as np
 import pandas as pd
 
-# import plotly.express as px
-# import plotly.io as pio
-# pio.templates.default = "plotly_white"
-# from sklearn.manifold import TSNE # for visualizing embeddings
+from EnvDL.core import ensure_dir_path_exists 
+from EnvDL.dlfn import g2fc_datawrapper, BigDataset, plDNN_general
+from EnvDL.dlfn import ResNet2d, BasicBlock2d
 
-import hilbertcurve
-from hilbertcurve.hilbertcurve import HilbertCurve
+import torch
+import torch.nn.functional as F # F.mse_loss
+from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
+from torch import nn
 
-from EnvDL.core import * # includes remove_matching_files
-from EnvDL.dna  import *
-from EnvDL.dlfn import * # includes LSUV_
-
-from tqdm import tqdm
+import lightning.pytorch as pl
+from lightning.pytorch.loggers import TensorBoardLogger
 ```
 
 ```{python}
 use_gpu_num = 0
-
-# Imports --------------------------------------------------------------------
-import torch
-from torch.utils.data import Dataset
-from torch.utils.data import DataLoader
-from torch import nn
-import torch.nn.functional as F # F.mse_loss
-
-import einops # for einops.rearrange
-
-import lightning.pytorch as pl
-from lightning.pytorch.loggers import TensorBoardLogger
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 if use_gpu_num in [0, 1]: 
     torch.cuda.set_device(use_gpu_num)
 print(f"Using {device} device")
 ```
-
 
 ```{python}
 cache_path = '../nbs_artifacts/03.12_g2fc_W_Hilbert_conv2d_resnet.ipynb/'
@@ -57,189 +41,45 @@ ensure_dir_path_exists(dir_path = cache_path)
 
 ## Load data
 
-### Weather (Variable in season)
-
 ```{python}
-load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
+X = g2fc_datawrapper()
+X.set_split()
+X.load_all(name_list = ['obs_env_lookup', 'YMat', 'PlantHarvest', 'WMat_hilb',], store=True) 
 
-np.load(load_from+'PlantHarvestNames.npy')
-PlantHarvest = np.load(load_from+'PlantHarvest.npy')
-
-# WMat = np.load(load_from+'WMat.npy')
-WMatNames = np.load(load_from+'WMatNames.npy')
-
-WMat_hilb = np.load(load_from+'WMat_hilb.npy')
-```
-
-### Response and lookup
-
-```{python}
-load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
-phno_geno = pd.read_csv(load_from+'phno_geno.csv')
-phno = phno_geno
-
-obs_geno_lookup = np.load(load_from+'obs_geno_lookup.npy') # Phno_Idx  Geno_Idx  Is_Phno_Idx
-obs_env_lookup = np.load(load_from+'obs_env_lookup.npy')   # Phno_Idx  Env_Idx   Is_Phno_Idx
-YMat = np.load(load_from+'YMat.npy')
-```
-
-
-## Demo retrieval
-
-```{python}
-# # Indexes
-# idx = 0
-
-# geno_idx = obs_geno_lookup[idx, 1]
-# env_idx = obs_env_lookup[idx, 1]
-```
-
-```{python}
-# # Response
-# YMat[idx]
-```
-
-```{python}
-# # Weather (plant in ground) ------------------------------------------------------------------------
-# # generate planting information
-# ## Basic tensor
-# WPlant = np.zeros(365)
-# WPlant[PlantHarvest[idx, 0]:PlantHarvest[idx, 1]] = 1
-
-# ## Hilbert
-# WPlant_hilb = np_3d_to_hilbert(WPlant[None, :, None])
-# WPlant_hilb = WPlant_hilb.squeeze(axis = 3)
-# WPlant_hilb[np.isnan(WPlant_hilb)] = 0
-# # px.imshow(WPlant_hilb.squeeze())
-# # compare with
-# # px.imshow(WMat_hilb[env_idx][8, :, :])
-```
-
-```{python}
-# # Weather (all) ------------------------------------------------------------------------------------
-# ## Basic tensor
-# np.concatenate([WMat[env_idx], WPlant[None, :]], axis = 0).shape
-# ## Hilbert
-# np.concatenate([WMat_hilb[env_idx], WPlant_hilb], axis = 0).shape
-```
-
-### Set up Dataset
-
-```{python}
-load_from = '../nbs_artifacts/01.06_g2fc_cluster_genotypes/'
-
-split_info = read_split_info(
-    load_from = '../nbs_artifacts/01.06_g2fc_cluster_genotypes/',
-    json_prefix = '2023:9:5:12:8:26')
-
-temp = phno.copy()
-temp[['Female', 'Male']] = temp['Hybrid'].str.split('/', expand = True)
-
-test_dict = find_idxs_split_dict(
-    obs_df = temp, 
-    split_dict = split_info['test'][0]
-)
-
-temp = temp.loc[test_dict['train_idx'], ] # restrict before re-aplying
-
-val_dict = find_idxs_split_dict(
-    obs_df = temp, 
-    split_dict = split_info['validate'][0]
-)
-```
-
-```{python}
-train_idx = val_dict['train_idx']
-test_idx  = val_dict['test_idx']
-```
-
-```{python}
-YMat_cs = calc_cs(YMat[train_idx])
-y_cs = apply_cs(YMat, YMat_cs)
-```
-
-```{python}
-# Debugging Data -----------------------------------------------------------------------------------
-
-train_idx = val_dict['train_idx']
-test_idx  = val_dict['test_idx']
+X.calc_cs('YMat', version = 'np', filter = 'val:train')
+X.calc_cs('WMat_hilb',            filter = 'val:train', filter_lookup= 'obs_env_lookup')
 ```
 
 ```{python}
 training_dataloader = DataLoader(BigDataset(
-    y = torch.from_numpy(                                 y_cs[train_idx])[:, None].to(torch.float).to('cuda'),
-    lookup_obs = torch.from_numpy(np.asarray([i for i in range(train_idx.size)])),
-    lookup_env = torch.from_numpy(   np.asarray(obs_env_lookup[train_idx])),
-    W = torch.from_numpy(WMat_hilb).to(torch.float).to('cuda'),
-    P = torch.from_numpy(PlantHarvest).to(torch.int),
+    lookups_are_filtered = False,
+    lookup_obs = X.get('val:train',      ops_string='   asarray from_numpy             '),
+    lookup_env = X.get('obs_env_lookup', ops_string='   asarray from_numpy             '),
+    y =          X.get('YMat',           ops_string='cs asarray from_numpy float cuda:0')[:, None],
+    W =          X.get('WMat_hilb',      ops_string='cs         from_numpy float cuda:0'),
+    P =          X.get('PlantHarvest',   ops_string='           from_numpy             '),
     W_type = 'hilbert'
     ),
     batch_size = 50,
     shuffle = True
 )
 
+
 validation_dataloader = DataLoader(BigDataset(
-    y = torch.from_numpy(                                 y_cs[test_idx])[:, None].to(torch.float).to('cuda'),
-    lookup_obs = torch.from_numpy(np.asarray([i for i in range(test_idx.size)])),
-    lookup_env = torch.from_numpy(np.asarray(   obs_env_lookup[test_idx])),
-    W = torch.from_numpy(WMat_hilb).to(torch.float).to('cuda'),
-    P = torch.from_numpy(PlantHarvest),
+    lookups_are_filtered = False,
+    lookup_obs = X.get('val:test',       ops_string='   asarray from_numpy             '),
+    lookup_env = X.get('obs_env_lookup', ops_string='   asarray from_numpy             '),
+    y =          X.get('YMat',           ops_string='cs asarray from_numpy float cuda:0')[:, None],
+    W =          X.get('WMat_hilb',      ops_string='cs         from_numpy float cuda:0'),
+    P =          X.get('PlantHarvest',   ops_string='           from_numpy             '),
     W_type = 'hilbert'
     ),
     batch_size = 50,
-    shuffle = False 
+    shuffle = False
 )
 ```
 
-```{python}
-
-# ResNet2d(
-#         block = BasicBlock2d, #: Type[Union[BasicBlock, Bottleneck]],
-#         layers = [2, 2, 2, 2], #: List[int],
-#         # num_classes: int = 1000,
-#         zero_init_residual = False,
-#         groups = 1,
-#         width_per_group = 64,
-#         replace_stride_with_dilation = None,
-#         norm_layer = None,
-#         input_channels = 17
-#     ).to('cuda')(next(iter(training_dataloader))[1])
-
-```
-
-
-```{python}
-
-
-# Module for training subnetworks.
-class plDNN_wthr(pl.LightningModule):
-    def __init__(self, mod):
-        super().__init__()
-        self.mod = mod
-        
-    def training_step(self, batch, batch_idx):
-        y_i, w_i = batch
-        pred = self.mod(w_i)
-        loss = F.mse_loss(pred, y_i)
-        self.log("train_loss", loss)
-        
-        with torch.no_grad():
-            weight_list=[(name, param) for name, param in model.named_parameters() if name.split('.')[-1] == 'weight']
-            for l in weight_list:
-                self.log(("train_mean"+l[0]), l[1].mean())
-                self.log(("train_std"+l[0]), l[1].std())        
-        return(loss)
-        
-    def validation_step(self, batch, batch_idx):
-        y_i, w_i = batch
-        pred = self.mod(w_i)
-        loss = F.mse_loss(pred, y_i)
-        self.log('val_loss', loss)        
-     
-    def configure_optimizers(self, **kwargs):
-        optimizer = torch.optim.Adam(self.parameters(), **kwargs)
-        return optimizer    
-```
+## Test Models
 
 ```{python}
 model = ResNet2d(
@@ -255,8 +95,8 @@ model = ResNet2d(
     ).to('cuda')
 
 
-max_epoch = 10
-DNNW = plDNN_wthr(model)     
+max_epoch = 2#10
+DNNW = plDNN_general(model)     
 optimizer = DNNW.configure_optimizers()
 
 logger = TensorBoardLogger("tb_logs", name="w-hilb-res-4rep2-from-pytorch")
@@ -279,8 +119,8 @@ model = ResNet2d(
     ).to('cuda')
 
 
-max_epoch = 10
-DNNW = plDNN_wthr(model)     
+# max_epoch = 10
+DNNW = plDNN_general(model)     
 optimizer = DNNW.configure_optimizers()
 
 logger = TensorBoardLogger("tb_logs", name="w-hilb-res-4rep4-from-pytorch")

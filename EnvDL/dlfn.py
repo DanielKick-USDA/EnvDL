@@ -5,7 +5,7 @@ __all__ = ['calc_cs', 'apply_cs', 'reverse_cs', 'read_split_info', 'find_idxs_sp
            'Conv1D_x2_Max_block', 'conv3x3', 'conv1x1', 'BasicBlock2d', 'BottleneckBlock2d', 'ResNet2d', 'conv0x3',
            'conv0x1', 'BasicBlock1d', 'BottleneckBlock1d', 'ResNet1d', 'train_loop', 'train_error', 'test_loop',
            'yhat_loop', 'train_nn', 'estimate_iterations', 'ACGTDataset', 'BigDataset', 'g2fc_datawrapper',
-           'train_loop_yx', 'train_error_yx', 'test_loop_yx', 'train_nn_yx', 'yhat_loop_yx']
+           'plDNN_general', 'train_loop_yx', 'train_error_yx', 'test_loop_yx', 'train_nn_yx', 'yhat_loop_yx']
 
 # %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 2
 import os, re
@@ -17,11 +17,14 @@ import numpy as np
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 
 from .core import read_json
 from .dna import np_3d_to_hilbert
+
+import lightning.pytorch as pl
 
 # %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 5
 def calc_cs(x # numeric array
@@ -855,6 +858,11 @@ class BigDataset(Dataset):
     def __init__(
         self,
         lookup_obs,
+        lookups_are_filtered = False, # This is a critical piece of information. For deduplicated lookups to work they must either be filtered so that the 
+                                      # lookup's length matchs y's length (idx will map to the right row) _or_ instead lookup_obs must contain a mapping 
+                                      # from the y's current length to the row in the full dataset. 
+                                      # If False idx -> lookup_obs[idx] -> lookup_env[idx] -> W[idx]
+                                      # If True  idx ------------------ -> lookup_env[idx] -> W[idx]
 #         lookup_geno,
 #         lookup_env,
 #         y,
@@ -887,6 +895,7 @@ class BigDataset(Dataset):
         """
         # Lookup info (so that deduplication works)
         self.lookup_obs = lookup_obs
+        self.lookups_are_filtered = lookups_are_filtered
         # if 'lookup_obs'  in kwargs: self.lookup_obs  = kwargs['lookup_obs'];
         if 'lookup_geno' in kwargs: self.lookup_geno = kwargs['lookup_geno'];
         if 'lookup_env'  in kwargs: self.lookup_env  = kwargs['lookup_env'];
@@ -936,7 +945,6 @@ class BigDataset(Dataset):
     def get_W(self, idx):
         W_device = torch.Tensor(self.W).get_device()
 
-
         env_idx = self.lookup_env[idx, 1]
         # get growing information
         WPlant = np.zeros(365)
@@ -962,11 +970,14 @@ class BigDataset(Dataset):
     
     def __getitem__(self, idx):
         out = []
-        # obs_idx = self.lookup_obs[idx]
-        if 'y' in self.out_names: out += [self.get_y(idx)]
-        if 'G' in self.out_names: out += [self.get_G(idx)]
-        if 'S' in self.out_names: out += [self.get_S(idx)]
-        if 'W' in self.out_names: out += [self.get_W(idx)]
+        obs_idx = idx
+        if self.lookups_are_filtered == False:
+            obs_idx = self.lookup_obs[idx]
+
+        if 'y' in self.out_names: out += [self.get_y(obs_idx)]
+        if 'G' in self.out_names: out += [self.get_G(obs_idx)]
+        if 'S' in self.out_names: out += [self.get_S(obs_idx)]
+        if 'W' in self.out_names: out += [self.get_W(obs_idx)]
         return out
 
 
@@ -1230,6 +1241,39 @@ E.g. filter = \'val:train\',  filter_lookup = \'obs_env_lookup\'
 
 # X.get('WMat', ops_string='asarray')[0:3, 0:3, 0]
 # X.get('WMat', ops_string='cs asarray')[0:3, 0:3, 0]
+
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 54
+class plDNN_general(pl.LightningModule):
+    def __init__(self, mod, log_weight_stats = False):
+        super().__init__()
+        self.mod = mod
+        self.log_weight_stats = log_weight_stats
+        
+    def training_step(self, batch, batch_idx):
+        y_i, x_i = batch
+        pred = self.mod(x_i)
+        loss = F.mse_loss(pred, y_i)
+        self.log("train_loss", loss)
+        
+        if self.log_weight_stats:
+            with torch.no_grad():
+                weight_list=[(name, param) for name, param in model.named_parameters() if name.split('.')[-1] == 'weight']
+                for l in weight_list:
+                    self.log(("train_mean"+l[0]), l[1].mean())
+                    self.log(("train_std"+l[0]), l[1].std())        
+
+        return(loss)
+        
+    def validation_step(self, batch, batch_idx):
+        y_i, x_i = batch
+        pred = self.mod(x_i)
+        loss = F.mse_loss(pred, y_i)
+        self.log('val_loss', loss)        
+     
+    def configure_optimizers(self, **kwargs):
+        optimizer = torch.optim.Adam(self.parameters(), **kwargs)
+        return optimizer    
 
 
 # %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 69
