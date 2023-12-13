@@ -1,0 +1,771 @@
+---
+title: Test out Hilbert Curve 1d
+jupyter: python3
+---
+
+
+> 
+
+
+```{python}
+import os, json, re
+
+import numpy as np
+import pandas as pd
+
+# import plotly.express as px
+# import plotly.io as pio
+# pio.templates.default = "plotly_white"
+# from sklearn.manifold import TSNE # for visualizing embeddings
+
+# import hilbertcurve
+# from hilbertcurve.hilbertcurve import HilbertCurve
+
+from EnvDL.core import * # includes remove_matching_files
+from EnvDL.dna  import *
+from EnvDL.dlfn import * # includes LSUV_
+
+from tqdm import tqdm
+```
+
+```{python}
+use_gpu_num = 0
+
+# Imports --------------------------------------------------------------------
+import torch
+from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
+from torch import nn
+import torch.nn.functional as F # F.mse_loss
+
+import einops # for einops.rearrange
+
+import lightning.pytorch as pl
+from lightning.pytorch.loggers import TensorBoardLogger
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+if use_gpu_num in [0, 1]: 
+    torch.cuda.set_device(use_gpu_num)
+print(f"Using {device} device")
+```
+
+```{python}
+cache_path = '../nbs_artifacts/03.22_g2fc_W_timeseries_conv1d_resnet.ipynb/'
+ensure_dir_path_exists(dir_path = cache_path)
+```
+
+## Load data
+
+```{python}
+# # Standard data prep
+
+# # Wrapper function to hide the steps of loading data
+# import numpy as np
+# from EnvDL.core import get_cached_result
+# from EnvDL.dlfn import read_split_info, find_idxs_split_dict
+# import pandas as pd
+# import torch
+
+# class g2fc_datawrapper():   
+#     def __init__(self):
+#         self.data_dict = {}
+#         self.cs_dict = {}
+#         print('Loading and storing default `phno`.')
+#         self.load(name='phno', store = True)
+    
+
+#     def set_split(self, load_from = '../nbs_artifacts/01.06_g2fc_cluster_genotypes/', json_prefix = '2023:9:5:12:8:26'):
+#         if 'phno' not in self.data_dict.keys():
+#             print('`phno` must be stored!\nManually initialize with .load()')
+#         else:
+#             split_info = read_split_info(load_from = load_from, json_prefix = json_prefix)
+
+#             temp = self.data_dict['phno'].copy()
+#             temp[['Female', 'Male']] = temp['Hybrid'].str.split('/', expand = True)
+
+#             self.test_dict = find_idxs_split_dict(
+#                 obs_df = temp, 
+#                 split_dict = split_info['test'][0]
+#             )
+
+#             temp = temp.loc[self.test_dict['train_idx'], ] # restrict before re-aplying
+
+#             self.val_dict = find_idxs_split_dict(
+#                 obs_df = temp, 
+#                 split_dict = split_info['validate'][0]
+#             )
+
+#     def generic_load(self, load_from, file_name):        
+#         if   file_name.split('.')[-1] == 'pkl': res = get_cached_result(load_from+file_name)
+#         elif file_name.split('.')[-1] == 'npy': res = np.load(load_from+file_name)
+#         elif file_name.split('.')[-1] == 'csv': res = pd.read_csv(load_from+file_name)
+#         else: print(f'Unrecognized file encoding: {file_name.split(".")[-1]} \nReturning None'); res = None
+#         return res
+
+#     def load(self, name='ACGT', store = False, **kwargs):
+#         # defaults for quick access
+#         defaults_dict = {
+#             ## Genomic Data
+#             'ACGT':         ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'ACGT.npy'],
+#             'ACGT_hilb':    ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'ACGT_hilb.npy'],            
+#             'KEGG_entries': ['../nbs_artifacts/01.05_g2fc_demo_model/', 'filtered_kegg_gene_entries.pkl'],
+#             'KEGG_slices':  ['../nbs_artifacts/01.05_g2fc_demo_model/', 'ACGT_gene_slice_list.pkl'],
+
+#             ## Soil and Management 
+#             'mgmtMatNames': ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'mgmtMatNames.npy'],
+#             'mgmtMat':      ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'mgmtMat.npy'],
+#             'SMatNames':    ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'SMatNames.npy'],
+#             'SMat':         ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'SMat.npy'],
+
+#             ## Weather
+#             'PlantHarvestNames': ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'PlantHarvestNames.npy'],
+#             'PlantHarvest':      ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'PlantHarvest.npy'],
+#             'WMat':              ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'WMat.npy'],
+#             'WMatNames':         ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'WMatNames.npy'],
+#             'WMat_hilb':         ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'WMat_hilb.npy'],
+
+#             # Response and lookup
+#             'phno':            ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'phno_geno.csv'],
+#             'obs_geno_lookup': ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'obs_geno_lookup.npy'], # Phno_Idx  Geno_Idx  Is_Phno_Idx
+#             'obs_env_lookup':  ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'obs_env_lookup.npy'],  # Phno_Idx  Env_Idx   Is_Phno_Idx
+#             'YMat':            ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'YMat.npy']
+#         }
+
+#         if name in defaults_dict.keys():
+#             load_from, file_name = defaults_dict[name]
+#         else: 
+#             print(f'`name` not recognized. Use `load_from` and `file_name` for greater control.\,Allowed `names` are:\n{list(defaults_dict.keys())}')
+        
+#         # overwrite defaults if desired
+#         if 'load_from' in kwargs.keys(): load_from = kwargs['load_from']
+#         if 'file_name' in kwargs.keys(): file_name = kwargs['file_name']
+
+#         res = self.generic_load(load_from=load_from, file_name= file_name)
+
+#         if store:
+#             self.data_dict[name] = res
+#         else:
+#             return res
+
+#     def load_all(self, name_list = [], store = False):
+#         if store:
+#             for e in name_list:
+#                 self.load(name = e, store=store)
+#         else:
+#             res_list = []
+#             for e in name_list:
+#                 res_list += [self.load(name = e, store=store)]
+#             return res_list
+
+#     def store_cs(self, name, cs_list):
+#         self.cs_dict[name] = cs_list
+
+#     def calc_cs(self, name, version = 'np', **kwargs):
+
+#         res = self.data_dict[name]
+#         if 'filter' in kwargs.keys():
+#             which_dict, which_split = kwargs['filter'].split(':')
+
+#             if which_split == 'train':  key = 'train_idx'
+#             elif which_split == 'test': key = 'test_idx'
+#             else: print('only `train` and `test` indexes are allowed.')
+
+#             if which_dict == 'val':    mask = self.val_dict[key]
+#             elif which_dict == 'test': mask = self.test_dict[key]
+#             else: print('only `val` and `test` sets are allowed.')
+
+#             if 'filter_lookup' in kwargs.keys():
+#                 # This block exists because some data is deduplicated. In the dataloader I use lookup tables to find the right values.
+#                 # That gets messy because the enviroment, genome, and yield all get different ones
+#                 # I could hardcode names to filters but that would make this code pretty inflexible (which I would like to avoid.)
+#                 # using the manual overwrite metod .store_cs() it's possible to get the desired behavior like this:
+#                 # X.store_cs('WMat', calc_cs(X.get('WMat')[np.array(list(set(X.get('obs_env_lookup', ops_string='filter:val:train')[:, 1]))),: ,:]))
+#                 # That is a lot messier looking than I would like. It's hard to see what's happening. 
+#                 # To get around this I'm adding a 'filter_lookup' kwarg that does the same job as the lookup tables in the data loader.
+#                 lookup = self.data_dict[kwargs['filter_lookup']]
+#                 lookup = lookup[mask, 1]
+#                 # deduplicate; for cs we don't need the order of the obs.
+#                 mask = np.array(list(set(lookup)))
+#             res = res[mask]
+
+#         else:
+#             print('''
+# Scaling based on ALL data. To avoid this pass in a split to be used. 
+# If a lookup table should be used to select observations (e.g. obs_env_lookup ) its name should be passed in. 
+# E.g. filter = \'val:train\',  filter_lookup = \'obs_env_lookup\'
+#                   ''')
+
+#         if version == 'np':
+#             self.cs_dict[name] = [np.asarray(np.mean(res, axis = 0)), np.asarray(np.std(res, axis = 0))]
+#         elif version == 'torch':
+#             self.cs_dict[name] = [torch.Tensor.mean(res, axis = 0), torch.Tensor.std(res, axis = 0)]
+
+#     def calc_cs_all(self, name_list, version = 'np', **kwargs):
+#         for name in name_list:
+#             self.calc_cs(name=name, version = version, **kwargs)
+
+#     def apply_cs(self, name, **kwargs):
+#         if name not in self.cs_dict.keys():
+#             self.calc_cs(name, kwargs)
+
+#         vals = self.cs_dict[name]
+#         res = self.data_dict[name]
+        
+#         if type(res) == type(vals[0]):
+#             pass
+#         elif type(res) == torch.Tensor:
+#             # convert to pytorch
+#             vals = [torch.from_numpy(e) for e in vals]
+#         elif type(res) == np.ndarray:
+#             # convert to numpy
+#             vals = [torch.Tensor.numpy(e) for e in vals]
+            
+#         center, scale = vals
+#         res = (res - center) / scale
+#         return res
+
+#     def get_cs(self, name):
+#         if name not in self.cs_dict.keys():
+#             res = None
+#         else:
+#             res = self.cs_dict[name]
+#         return res
+
+#     def reverse_cs(self, name, x):
+#         vals = self.cs_dict[name]
+
+#         if type(x) == type(vals[0]):
+#             pass
+#         elif type(x) == torch.Tensor:
+#             # convert to pytorch
+#             vals = [torch.from_numpy(e) for e in vals]
+#         elif type(res) == np.ndarray:
+#             # convert to numpy
+#             vals = [torch.Tensor.numpy(e) for e in vals]
+
+#         center, scale = vals
+#         res = (res * scale) + center
+#         return res
+
+    
+#     def get(self, name, ops_string = ''):
+#         # is split info being requested? (for lookup_obs most likely). Otherwise main data is being requested.
+#         if name not in ['val:train', 'test:train', 'val:test', 'test:test']:
+#             if name not in self.data_dict.keys():
+#                 self.load(name, store=True)
+#             res = self.data_dict[name]
+#         else: 
+#             which_dict, which_split = name.split(':')
+
+#             if which_split == 'train':  key = 'train_idx'
+#             elif which_split == 'test': key = 'test_idx'
+#             else: print('only `train` and `test` indexes are allowed.')
+
+#             if which_dict == 'val':    res = self.val_dict[key]
+#             elif which_dict == 'test': res = self.test_dict[key]
+#             else: print('only `val` and `test` sets are allowed.')
+            
+#         # apply opperations
+#         ops_string = [e for e in ops_string.split(' ') if e != '']
+#         for ops in ops_string:
+#             if ops[0:6] == 'filter':
+#                 _, which_dict, which_split = ops.split(':')
+
+#                 if which_split == 'train':  key = 'train_idx'
+#                 elif which_split == 'test': key = 'test_idx'
+#                 else: print('only `train` and `test` indexes are allowed.')
+
+#                 if which_dict == 'val':    res_idx = self.val_dict[key]
+#                 elif which_dict == 'test': res_idx = self.test_dict[key]
+#                 else: print('only `val` and `test` sets are allowed.')
+
+#                 res = res[res_idx]
+
+#             if ops == 'cs':
+#                 res = self.apply_cs(name)
+            
+#             if ops == 'asarray':
+#                 res = np.asarray(res)
+#             if ops == 'from_numpy':
+#                 res = torch.from_numpy(res)
+#             if ops == 'float':
+#                 res = res.to(torch.float)
+#             if ops[0:4] == 'cuda':
+#                 # send to device by number. e.g. cuda:0 -> X.to(0)
+#                 res = res.to(int(ops.split(':')[-1]))
+
+#         return res
+
+
+# # some example usage 
+# # X = g2fc_datawrapper()
+# # X.set_split()
+# # X.load_all(name_list = ['obs_env_lookup', 'YMat', 'PlantHarvest', 'WMat',], store=True) 
+# # X.calc_cs('YMat', version = 'np', filter = 'val:train'); X.cs_dict['YMat']
+# # X.calc_cs_all(['YMat'], version = 'np', filter = 'val:train'); X.cs_dict['YMat']
+# # X.calc_cs('YMat', version = 'np'); X.cs_dict['YMat']
+
+# # some demonstration of when to use kwargs for scaling 
+# # how do I manually do scaling for enviromental things?
+# # X.store_cs('WMat', calc_cs(X.get('WMat')[np.array(list(set(X.get('obs_env_lookup', ops_string='filter:val:train')[:, 1]))),: ,:]))
+# # [e[0:3, 0] for e in X.cs_dict['WMat']]
+# # X.calc_cs('WMat', filter = 'val:train', filter_lookup= 'obs_env_lookup')
+# # [e[0:3, 0] for e in X.cs_dict['WMat']]
+# # X.calc_cs('WMat')
+# # [e[0:3, 0] for e in X.cs_dict['WMat']]
+
+# # X.get('WMat', ops_string='asarray')[0:3, 0:3, 0]
+# # X.get('WMat', ops_string='cs asarray')[0:3, 0:3, 0]
+```
+
+```{python}
+from EnvDL.dlfn import g2fc_datawrapper
+```
+
+```{python}
+X = g2fc_datawrapper()
+X.set_split()
+X.load_all(name_list = ['obs_env_lookup', 'YMat', 'PlantHarvest', 'WMat',], store=True) 
+
+X.calc_cs('YMat', version = 'np', filter = 'val:train')
+X.calc_cs('WMat', filter = 'val:train', filter_lookup= 'obs_env_lookup')
+```
+
+```{python}
+
+training_dataloader = DataLoader(BigDataset(
+    y =          X.get('YMat',           ops_string='filter:val:train cs asarray from_numpy float cuda:0'),
+    lookup_obs = X.get('val:train',      ops_string='                    asarray from_numpy             '),
+    lookup_env = X.get('obs_env_lookup', ops_string='filter:val:train    asarray from_numpy             '),
+    W =          X.get('WMat',           ops_string='                 cs         from_numpy float cuda:0'),
+    P =          X.get('PlantHarvest',   ops_string='                            from_numpy             '),
+    W_type = 'raw'
+    ),
+    batch_size = 50,
+    shuffle = True
+)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{python}
+X.get('YMat',           ops_string='filter:val:train asarray from_numpy float cuda:0')
+```
+
+```{python}
+(X.get('YMat', ops_string='asarray from_numpy float cuda:0').shape, 
+X.get('YMat', ops_string='filter:val:train asarray from_numpy float cuda:0').shape)
+```
+
+```{python}
+# TODO move this to module and fix old versions. 
+# This one has lookups deduplicated data in a way that's more in line with my expectations (no more filtering lookup tables for the dataloader!)
+class BigDataset(Dataset):
+    def __init__(
+        self,
+        lookup_obs,
+#         lookup_geno,
+#         lookup_env,
+#         y,
+#         G, 
+#         G_type
+#         S,
+#         P,
+#         W,
+#         W_type,
+        transform = None, 
+        target_transform = None,
+        **kwargs 
+        ):
+        """
+        This class produces a set with one or more input tensors. For flexibility the only _required_ input is `lookup_obs`, a tensor with the index of observations. 
+        Everything else is provided as a kwarg. Output is a list of tensors1 ordered [y, G, S, W], any of these not initalized will be missing but not empty (e.g. [y, S, W] not [y, None, S, W]).       
+        Used inputs are:
+        lookup_obs: index for y, used by __getitem__ for obs_idx
+        lookup_geno: index for G, row obs_idx, column 1 is geno_idx (geno information is deduplicated, hence the need for a lookup)
+        lookup_env: index for S & W, , row obs_idx, column 1 is env_idx (env information is deduplicated, hence the need for a lookup)
+        y: yield
+        G: Genomic information 
+        G_type: how the infomation should be returned, 'raw', 'hilbert', or 'list' (i.e. of tensors for snps in each gene)
+        S: Soil information
+        P: Planting/Harvest date contained in column 0, 1 respectively 
+        W: Weather data
+        W_type: how the infomation should be returned, 'raw' or 'hilbert'
+
+        1 G may also be returned as a list of tensors
+        """
+        # Lookup info (so that deduplication works)
+        self.lookup_obs = lookup_obs
+        # if 'lookup_obs'  in kwargs: self.lookup_obs  = kwargs['lookup_obs'];
+        if 'lookup_geno' in kwargs: self.lookup_geno = kwargs['lookup_geno'];
+        if 'lookup_env'  in kwargs: self.lookup_env  = kwargs['lookup_env'];
+        # Data
+        if 'y' in kwargs: self.y = kwargs['y'];
+        if 'G' in kwargs: self.G = kwargs['G'];
+        if 'S' in kwargs: self.S = kwargs['S'];
+        if 'P' in kwargs: self.P = kwargs['P']; # PlantHarvest so that planting can be added into W
+        if 'W' in kwargs: self.W = kwargs['W'];
+        # Data prep state information
+        if 'G_type' in kwargs: self.G_type = kwargs['G_type']; # raw, hilbert, list
+        if 'W_type' in kwargs: self.W_type = kwargs['W_type']; # raw, hilbert
+        # Data to be returned
+        self.out_names = [e for e in ['y', 'G', 'S', 'W'] if e in kwargs]
+        # Transformations
+        self.transform = transform
+        self.target_transform = target_transform
+        
+    def __len__(self):
+        return len(self.lookup_obs)
+    
+
+    # These used to be in __getitem__ but separating them like this allows for them to be overwritten more easily
+    def get_y(self, idx):
+        y_idx = self.y[idx]
+        if self.transform:
+            y_idx = self.transform(y_idx)
+        return(y_idx)
+        
+    def get_G(self, idx):
+        geno_idx = self.lookup_geno[idx, 1]
+        if self.G_type in ['raw', 'hilbert']:
+            G_idx = self.G[geno_idx]
+        if 'list' == self.G_type:
+            G_idx = [e[geno_idx] for e in self.G]
+        if self.transform:
+            G_idx = self.transform(G_idx)
+        return(G_idx)
+
+    def get_S(self, idx):
+        env_idx = self.lookup_env[idx, 1]
+        S_idx = self.S[env_idx]
+        if self.transform:
+            S_idx = self.transform(S_idx)
+        return(S_idx)
+
+    def get_W(self, idx):
+        W_device = torch.Tensor(self.W).get_device()
+
+
+        env_idx = self.lookup_env[idx, 1]
+        # get growing information
+        WPlant = np.zeros(365)
+        # WPlant[self.P[obs_idx, 0]:self.P[obs_idx, 1]] = 1
+        WPlant[self.P[idx, 0]:self.P[idx, 1]] = 1
+        if self.W_type == 'raw':
+            WPlant = torch.from_numpy(WPlant).to(torch.float)
+            # if needed send to gpu
+            if W_device != -1: WPlant = WPlant.to(W_device)            
+            W_idx = torch.concatenate([self.W[env_idx], WPlant[None, :]], axis = 0)
+        if self.W_type == 'hilbert':
+            # convert growing info to hilbert curve
+            WPlant_hilb = np_3d_to_hilbert(WPlant[None, :, None], silent = True)
+            WPlant_hilb = WPlant_hilb.squeeze(axis = 3)
+            WPlant_hilb[np.isnan(WPlant_hilb)] = 0
+            WPlant_hilb = torch.from_numpy(WPlant_hilb).to(torch.float)
+            # if needed send to gpu
+            if W_device != -1: WPlant_hilb = WPlant_hilb.to(W_device)
+            W_idx = torch.concatenate([self.W[env_idx], WPlant_hilb], axis = 0)
+        if self.transform:
+            W_idx = self.transform(W_idx)
+        return(W_idx)
+    
+    def __getitem__(self, idx):
+        out = []
+        obs_idx = self.lookup_obs[idx]
+        if 'y' in self.out_names: out += [self.get_y(idx)]
+        if 'G' in self.out_names: out += [self.get_G(obs_idx)]
+        if 'S' in self.out_names: out += [self.get_S(obs_idx)]
+        if 'W' in self.out_names: out += [self.get_W(obs_idx)]
+        return out
+```
+
+```{python}
+training_dataloader = DataLoader(BigDataset(
+    y =          torch.from_numpy(                        y_cs[train_idx])[:, None].to(torch.float),
+    lookup_obs = torch.from_numpy(np.asarray([i for i in range(train_idx.size)])),
+    lookup_env = torch.from_numpy(np.asarray(obs_env_lookup[   train_idx])),
+    W =          torch.from_numpy(WMat).to(torch.float),
+    P =          torch.from_numpy(PlantHarvest),
+    W_type = 'raw'
+    ),
+    batch_size = 50,
+    shuffle = True
+)
+```
+
+```{python}
+X = g2fc_datawrapper()
+X.set_split()
+X.load_all(name_list = ['obs_env_lookup', 'YMat', 'PlantHarvest', 'WMat',], store=True) 
+
+training_dataloader = DataLoader(BigDataset(
+    y =          X.get('YMat',           ops_string='filter:val:train asarray from_numpy float cuda:0'),
+    lookup_obs = X.get('val:train',      ops_string='                 asarray from_numpy             '),
+    lookup_env = X.get('obs_env_lookup', ops_string='filter:val:train asarray from_numpy             '),
+    W =          X.get('WMat',           ops_string='                         from_numpy float cuda:0'),
+    P =          X.get('PlantHarvest',   ops_string='                         from_numpy             '),
+    W_type = 'raw'
+    ),
+    batch_size = 50,
+    shuffle = True
+)
+```
+
+```{python}
+(X.get('obs_env_lookup', ops_string='filter:val:train asarray from_numpy             ').shape,
+X.get('obs_env_lookup', ops_string='  asarray from_numpy             ').shape)
+```
+
+
+
+```{python}
+# X.get('YMat', ops_string='asarray from_numpy float cuda:0')[:, None].shape
+```
+
+```{python}
+load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
+
+np.load(load_from+'PlantHarvestNames.npy')
+PlantHarvest = np.load(load_from+'PlantHarvest.npy')
+
+WMat = np.load(load_from+'WMat.npy')
+WMatNames = np.load(load_from+'WMatNames.npy')
+
+# WMat_hilb = np.load(load_from+'WMat_hilb.npy')
+
+load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
+phno_geno = pd.read_csv(load_from+'phno_geno.csv')
+phno = phno_geno
+
+obs_geno_lookup = np.load(load_from+'obs_geno_lookup.npy') # Phno_Idx  Geno_Idx  Is_Phno_Idx
+obs_env_lookup = np.load(load_from+'obs_env_lookup.npy')   # Phno_Idx  Env_Idx   Is_Phno_Idx
+YMat = np.load(load_from+'YMat.npy')
+```
+
+
+### Weather (Variable in season)
+
+```{python}
+load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
+
+np.load(load_from+'PlantHarvestNames.npy')
+PlantHarvest = np.load(load_from+'PlantHarvest.npy')
+
+WMat = np.load(load_from+'WMat.npy')
+WMatNames = np.load(load_from+'WMatNames.npy')
+
+# WMat_hilb = np.load(load_from+'WMat_hilb.npy')
+```
+
+### Response and lookup
+
+```{python}
+load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
+phno_geno = pd.read_csv(load_from+'phno_geno.csv')
+phno = phno_geno
+
+obs_geno_lookup = np.load(load_from+'obs_geno_lookup.npy') # Phno_Idx  Geno_Idx  Is_Phno_Idx
+obs_env_lookup = np.load(load_from+'obs_env_lookup.npy')   # Phno_Idx  Env_Idx   Is_Phno_Idx
+YMat = np.load(load_from+'YMat.npy')
+```
+
+### Set up Dataset
+
+```{python}
+load_from = '../nbs_artifacts/01.06_g2fc_cluster_genotypes/'
+
+split_info = read_split_info(
+    load_from = '../nbs_artifacts/01.06_g2fc_cluster_genotypes/',
+    json_prefix = '2023:9:5:12:8:26')
+
+temp = phno.copy()
+temp[['Female', 'Male']] = temp['Hybrid'].str.split('/', expand = True)
+
+test_dict = find_idxs_split_dict(
+    obs_df = temp, 
+    split_dict = split_info['test'][0]
+)
+
+temp = temp.loc[test_dict['train_idx'], ] # restrict before re-aplying
+
+val_dict = find_idxs_split_dict(
+    obs_df = temp, 
+    split_dict = split_info['validate'][0]
+)
+```
+
+```{python}
+train_idx = val_dict['train_idx']
+test_idx  = val_dict['test_idx']
+```
+
+```{python}
+YMat_cs = calc_cs(YMat[train_idx])
+y_cs = apply_cs(YMat, YMat_cs)
+```
+
+```{python}
+# Debugging Data -----------------------------------------------------------------------------------
+
+train_idx = val_dict['train_idx']
+test_idx  = val_dict['test_idx']
+```
+
+```{python}
+training_dataloader = DataLoader(BigDataset(
+    y = torch.from_numpy(                                 y_cs[train_idx])[:, None].to(torch.float),
+    lookup_obs = torch.from_numpy(np.asarray([i for i in range(train_idx.size)])),
+    lookup_env = torch.from_numpy(   np.asarray(obs_env_lookup[train_idx])),
+    W = torch.from_numpy(WMat).to(torch.float),
+    P = torch.from_numpy(PlantHarvest),
+    W_type = 'raw'
+    ),
+    batch_size = 50,
+    shuffle = True
+)
+
+validation_dataloader = DataLoader(BigDataset(
+    y = torch.from_numpy(                                 y_cs[test_idx])[:, None].to(torch.float),
+    lookup_obs = torch.from_numpy(np.asarray([i for i in range(test_idx.size)])),
+    lookup_env = torch.from_numpy(np.asarray(   obs_env_lookup[test_idx])),
+    W = torch.from_numpy(WMat).to(torch.float),
+    P = torch.from_numpy(PlantHarvest),
+    W_type = 'raw'
+    ),
+    batch_size = 50,
+    shuffle = False 
+)
+```
+
+```{python}
+next(iter(training_dataloader))[1].shape
+```
+
+```{python}
+ResNet1d(
+        block = BasicBlock1d, #: Type[Union[BasicBlock, Bottleneck]],
+        layers = [2, 2, 2, 2], #: List[int],
+        # num_classes: int = 1000,
+        zero_init_residual = False,
+        groups = 1,
+        width_per_group = 64,
+        replace_stride_with_dilation = None,
+        norm_layer = None,
+        input_channels = 17
+    )(next(iter(training_dataloader))[1])
+```
+
+```{python}
+# ResNet1d(
+#         block = BasicBlock1d, #: Type[Union[BasicBlock, Bottleneck]],
+#         layers = [2, 2, 2, 2], #: List[int],
+#         # num_classes: int = 1000,
+#         zero_init_residual = False,
+#         groups = 1,
+#         width_per_group = 64,
+#         replace_stride_with_dilation = None,
+#         norm_layer = None,
+#         input_channels = 17
+#     )(torch.randn(([50, 17, 365])))
+```
+
+```{python}
+# Module for training subnetworks.
+class plDNN_wthr(pl.LightningModule):
+    def __init__(self, mod):
+        super().__init__()
+        self.mod = mod
+        
+    def training_step(self, batch, batch_idx):
+        y_i, w_i = batch
+        pred = self.mod(w_i)
+        loss = F.mse_loss(pred, y_i)
+        self.log("train_loss", loss)
+        
+        with torch.no_grad():
+            weight_list=[(name, param) for name, param in model.named_parameters() if name.split('.')[-1] == 'weight']
+            for l in weight_list:
+                self.log(("train_mean"+l[0]), l[1].mean())
+                self.log(("train_std"+l[0]), l[1].std())        
+        return(loss)
+        
+    def validation_step(self, batch, batch_idx):
+        y_i, w_i = batch
+        pred = self.mod(w_i)
+        loss = F.mse_loss(pred, y_i)
+        self.log('val_loss', loss)        
+     
+    def configure_optimizers(self, **kwargs):
+        optimizer = torch.optim.Adam(self.parameters(), **kwargs)
+        return optimizer    
+```
+
+```{python}
+model = ResNet1d(
+        block = BasicBlock1d, #: Type[Union[BasicBlock, Bottleneck]],
+        layers = [2, 2, 2, 2], #: List[int],
+        # num_classes: int = 1000,
+        zero_init_residual = False,
+        groups = 1,
+        width_per_group = 64,
+        replace_stride_with_dilation = None,
+        norm_layer = None,
+        input_channels = 17
+    ).to('cuda')
+
+
+max_epoch = 10
+DNNW = plDNN_wthr(model)     
+optimizer = DNNW.configure_optimizers()
+
+logger = TensorBoardLogger("tb_logs", name="w-cnn1-res-4rep2-from-pytorch")
+trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
+
+trainer.fit(model=DNNW, train_dataloaders=training_dataloader, val_dataloaders=validation_dataloader)
+
+```
+
+```{python}
+
+model = ResNet1d(
+        block = BasicBlock1d, #: Type[Union[BasicBlock, Bottleneck]],
+        layers = [4, 4, 4, 4], #: List[int],
+        # num_classes: int = 1000,
+        zero_init_residual = False,
+        groups = 1,
+        width_per_group = 64,
+        replace_stride_with_dilation = None,
+        norm_layer = None,
+        input_channels = 17
+    ).to('cuda')
+
+
+max_epoch = 10
+DNNW = plDNN_wthr(model)     
+optimizer = DNNW.configure_optimizers()
+
+logger = TensorBoardLogger("tb_logs", name="w-cnn1-res-4rep4-from-pytorch")
+trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
+
+trainer.fit(model=DNNW, train_dataloaders=training_dataloader, val_dataloaders=validation_dataloader)
+```
+
+
+
+
+
+
+
+
+
+

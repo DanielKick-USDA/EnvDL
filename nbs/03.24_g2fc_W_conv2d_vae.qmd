@@ -1,0 +1,2132 @@
+---
+title: G only ACGT Probabilities Hilbert Conv1D
+jupyter: python3
+---
+
+```{python}
+# Hacky way to schedule. Here I'm setting these to sleep until the gpus should be free.
+# At the end of the notebooks  os._exit(00) will kill the kernel freeing the gpu. 
+#                          Hours to wait
+# import time; time.sleep( 6 * (60*60))
+```
+
+
+> 
+
+
+```{python}
+import os, json, re
+
+import numpy as np
+import pandas as pd
+
+import plotly.express as px
+import plotly.io as pio
+pio.templates.default = "plotly_white"
+
+import hilbertcurve
+from hilbertcurve.hilbertcurve import HilbertCurve
+
+from EnvDL.core import * # includes remove_matching_files
+from EnvDL.dna  import *
+from EnvDL.dlfn import * # includes LSUV_
+
+from tqdm import tqdm
+```
+
+```{python}
+use_gpu_num = 0
+
+# Imports --------------------------------------------------------------------
+import torch
+from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
+from torch import nn
+import torch.nn.functional as F # F.mse_loss
+
+import lightning.pytorch as pl
+from lightning.pytorch.loggers import TensorBoardLogger
+
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+if use_gpu_num in [0, 1]: 
+    torch.cuda.set_device(use_gpu_num)
+print(f"Using {device} device")
+```
+
+```{python}
+cache_path = '../nbs_artifacts/03.24_g2fc_W_conv2d_vae/'
+ensure_dir_path_exists(dir_path = cache_path)
+```
+
+## Load data
+
+### Weather (Variable in season)
+
+```{python}
+load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
+np.load(load_from+'PlantHarvestNames.npy')
+PlantHarvest = np.load(load_from+'PlantHarvest.npy')
+
+WMat = np.load(load_from+'WMat.npy')
+WMatNames = np.load(load_from+'WMatNames.npy')
+
+WMat_hilb = np.load(load_from+'WMat_hilb.npy')
+```
+
+### Response and lookup
+
+```{python}
+load_from = '../nbs_artifacts/01.03_g2fc_prep_matrices/'
+phno_geno = pd.read_csv(load_from+'phno_geno.csv')
+phno = phno_geno
+
+obs_geno_lookup = np.load(load_from+'obs_geno_lookup.npy') # Phno_Idx  Geno_Idx  Is_Phno_Idx
+obs_env_lookup = np.load(load_from+'obs_env_lookup.npy')   # Phno_Idx  Env_Idx   Is_Phno_Idx
+YMat = np.load(load_from+'YMat.npy')
+```
+
+
+### Create train/test validate indicies from json
+
+```{python}
+load_from = '../nbs_artifacts/01.06_g2fc_cluster_genotypes/'
+
+split_info = read_split_info(
+    load_from = '../nbs_artifacts/01.06_g2fc_cluster_genotypes/',
+    json_prefix = '2023:9:5:12:8:26')
+
+temp = phno.copy()
+temp[['Female', 'Male']] = temp['Hybrid'].str.split('/', expand = True)
+
+test_dict = find_idxs_split_dict(
+    obs_df = temp, 
+    split_dict = split_info['test'][0]
+)
+
+temp = temp.loc[test_dict['train_idx'], ] # restrict before re-aplying
+
+val_dict = find_idxs_split_dict(
+    obs_df = temp, 
+    split_dict = split_info['validate'][0]
+)
+```
+
+```{python}
+train_idx = val_dict['train_idx']
+test_idx  = val_dict['test_idx']
+```
+
+```{python}
+# # confirm all observation idxs are have genomic information
+# assert [] == [e for e in list(train_idx)+list(test_idx) if e not in obs_geno_lookup[:, 0]]
+```
+
+### Set up Dataset
+
+```{python}
+x = torch.from_numpy(WMat)
+x.get_device()
+```
+
+```{python}
+# This dataset is designed to be the go to Dataset for this project. 
+# It has enough flexibility to take all or a subset of the variables.
+
+class BigDataset(Dataset):
+    def __init__(
+        self,
+#         lookup_obs
+#         lookup_geno,
+#         lookup_env,
+#         y,
+#         G, 
+#         G_type
+#         S,
+#         P,
+#         W,
+#         W_type,
+        transform = None, 
+        target_transform = None,
+        **kwargs 
+        ):
+        # Lookup info (so that deduplication works)
+        if 'lookup_obs'  in kwargs: self.lookup_obs = kwargs['lookup_obs'];
+        if 'lookup_geno' in kwargs: self.lookup_geno = kwargs['lookup_geno'];
+        if 'lookup_env'  in kwargs: self.lookup_env  = kwargs['lookup_env'];
+        # Data
+        if 'y' in kwargs: self.y = kwargs['y'];
+        if 'G' in kwargs: self.G = kwargs['G'];
+        if 'S' in kwargs: self.S = kwargs['S'];
+        if 'P' in kwargs: self.P = kwargs['P']; # PlantHarvest so that planting can be added into W
+        if 'W' in kwargs: self.W = kwargs['W'];
+        # Data prep state information
+        if 'G_type' in kwargs: self.G_type = kwargs['G_type']; # raw, hilbert, list
+        if 'W_type' in kwargs: self.W_type = kwargs['W_type']; # raw, hilbert
+        # Data to be returned
+        self.out_names = [e for e in ['y', 'G', 'S', 'W'] if e in kwargs]
+        # Transformations
+        self.transform = transform
+        self.target_transform = target_transform
+        
+    def __len__(self):
+        return len(self.lookup_obs)
+    
+    def __getitem__(self, idx):
+        out = []
+        obs_idx = self.lookup_obs[idx]
+        if 'y' in self.out_names:
+            y_idx = self.y[idx]
+            if self.transform:
+                y_idx = self.transform(y_idx)
+            out += [y_idx]
+        if 'G' in self.out_names:
+            geno_idx = self.lookup_geno[idx, 1]
+            if self.G_type in ['raw', 'hilbert']:
+                G_idx = self.G[geno_idx]
+            if 'list' == self.G_type:
+                G_idx = [e[geno_idx] for e in self.G]
+            if self.transform:
+                G_idx = self.transform(G_idx)
+            out += [G_idx]
+        if 'S' in self.out_names:
+            env_idx = self.lookup_env[idx, 1]
+            S_idx = self.S[env_idx]
+            if self.transform:
+                S_idx = self.transform(S_idx)
+            out += [S_idx]
+        if 'W' in self.out_names:
+            env_idx = self.lookup_env[idx, 1]
+            # get growing information
+            WPlant = np.zeros(365)
+            WPlant[self.P[obs_idx, 0]:self.P[obs_idx, 1]] = 1
+            if self.W_type == 'raw':
+                WPlant = torch.from_numpy(WPlant).to(torch.float32).to(self.W.get_device())
+                W_idx = torch.concatenate([self.W[env_idx], WPlant[None, :]], axis = 0)
+            if self.W_type == 'hilbert':
+                # convert growing info to hilbert curve
+                WPlant_hilb = np_3d_to_hilbert(WPlant[None, :, None], silent = True)
+                WPlant_hilb = WPlant_hilb.squeeze(axis = 3)
+                WPlant_hilb[np.isnan(WPlant_hilb)] = 0
+#                 WPlant_hilb = torch.from_numpy(WPlant_hilb)
+                WPlant_hilb = torch.from_numpy(WPlant_hilb).to(torch.float32).to(self.W.get_device())
+                W_idx = torch.concatenate([self.W[env_idx], WPlant_hilb], axis = 0)
+            if self.transform:
+                W_idx = self.transform(W_idx)
+            out += [W_idx]
+        return out
+
+# next(iter(training_dataloader))    
+    
+# demo = BigDataset(
+#     lookup_obs = [i for i in range(len(YMat))], # Training/testing. To use a deduplicated dataset, 
+#                                                 # Pass the training index through the desired lookup
+#                                                 # list(set(obs_env_lookup[:, 2])) -> phno idxs for each env (1 for each)
+#     y = YMat,
+#     lookup_geno = obs_geno_lookup,
+#     G = ACGT,
+#     G_type = 'raw',
+#     lookup_env = obs_env_lookup,
+#     S = SMat,
+#     P = PlantHarvest,
+#     W = WMat,
+#     W_type = 'raw',
+#           )   
+```
+
+## Setup Autoencoder Networks
+
+### Reference Weather Info
+based on 01.30_g2fc_W_only
+
+```{python}
+# px.imshow(WMat[0, :, :])
+```
+
+```{python}
+WMat_mean = WMat.mean(axis = 0)
+WMat_std  = WMat.std(axis = 0)
+
+WMat = ((WMat-WMat_mean)/WMat_std)
+```
+
+```{python}
+# px.imshow(WMat[0, :, :])
+```
+
+```{python}
+# px.imshow(((WMat[0, :, :]*WMat_std)+WMat_mean))
+```
+
+```{python}
+training_dataloader = DataLoader(
+    BigDataset(
+#         lookup_obs = [i for i in range(len(YMat))], # Training/testing. To use a deduplicated dataset, 
+#                                                     # Pass the training index through the desired lookup
+#                                                     # list(set(obs_env_lookup[:, 2])) -> phno idxs for each env (1 for each)
+        lookup_obs = list(set(obs_env_lookup[:, 2])),
+#         y = torch.from_numpy(YMat).to(torch.float32),
+    #     lookup_geno = obs_geno_lookup,
+    #     G = ACGT,
+    #     G_type = 'raw',
+        lookup_env = torch.from_numpy(obs_env_lookup).to(device),
+    #     S = SMat,
+        P = torch.from_numpy(PlantHarvest).to(device),
+#         W = torch.from_numpy(WMat).to(torch.float32).to(device),
+#         W_type = 'raw',
+        W = torch.from_numpy(WMat_hilb).to(device).to(torch.float32),
+        W_type = 'hilbert',
+    ),
+    batch_size = 50,
+    shuffle = True
+)
+
+print('Reminder: only '+str(len(list(set(obs_env_lookup[:, 2]))))+' envs.')
+```
+
+```{python}
+[e.shape for e in next(iter(training_dataloader))]
+```
+
+### Using MNIST to test 2d CNN VAE
+
+```{python}
+import torchvision
+mnist_data = torchvision.datasets.MNIST(
+    './rmme_mnist/', 
+    download=True,
+    transform=torchvision.transforms.Compose([
+        torchvision.transforms.ToTensor(),
+        torchvision.transforms.Normalize(
+            (0.1307,), (0.3081,))
+            ]))
+training_dataloader = torch.utils.data.DataLoader(
+    mnist_data,
+    
+    batch_size=40,
+    shuffle=True,
+    # num_workers=args.nThreads
+)
+```
+
+```{python}
+x = next(iter(training_dataloader))
+print(x[1][0])
+px.imshow(x[0].squeeze()[0, :, :].detach())
+```
+
+```{python}
+x = x[0]
+```
+
+
+```{python}
+class Conv2dEncoder(nn.Module):
+    def __init__(self):
+        super(Conv2dEncoder, self).__init__()
+        self.encoder = nn.ModuleList([
+            nn.Conv2d(1, 2, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False),
+            nn.Conv2d(2, 4, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False),
+            nn.Conv2d(4, 8, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False)
+            ])
+
+    def forward(self, x):
+        for mod in self.encoder:
+             x = mod(x)
+            #  print(x.shape)
+        return(x)
+    
+vae_en = Conv2dEncoder()
+vae_en(x).shape
+```
+
+```{python}
+8*4*4
+```
+
+
+```{python}
+
+class Conv2dReparam(nn.Module):
+    def __init__(self, in_dims, latent_dims):
+        super(Conv2dReparam, self).__init__()
+        self.fc_mu = nn.Sequential(nn.Linear(in_dims, latent_dims))
+        self.fc_log_var = nn.Sequential(nn.Linear(in_dims, latent_dims))
+
+    def forward(self, res):
+        x = nn.Flatten()(res)
+        # print(len(x))
+        mu = self.fc_mu(x)
+        log_var = self.fc_log_var(x)
+        return([mu, log_var])
+
+vae_rp = Conv2dReparam(128, 256)
+vae_rp(vae_en(x))[0].shape
+```
+
+```{python}
+class Conv2dSample(nn.Module):
+    def __init__(self):
+        super(Conv2dSample, self).__init__()
+
+    def forward(self, mu, log_var):
+        std = torch.exp(log_var/2)
+        p = torch.distributions.Normal(torch.zeros_like(mu), torch.ones_like(std))
+        q = torch.distributions.Normal(mu, std)
+        z = q.rsample()
+        return p, q, z
+
+res = vae_en(x)
+mu, log_var = vae_rp(res)    
+vae_samp = Conv2dSample()
+p, q, z = vae_samp(mu, log_var)
+```
+
+
+```{python}
+class Conv2dExpand(nn.Module):
+    def __init__(self, latent_dims, out_dims
+                #  , out_shape
+                 ):
+        super(Conv2dExpand, self).__init__()
+        self.fc_expand = nn.Sequential(nn.Linear(latent_dims, out_dims))
+
+    def forward(self, res):
+        res = self.fc_expand(res)
+        return(res)
+
+
+vae_ex = Conv2dExpand(256, 128)
+res2 = vae_ex(z)
+res2.shape
+```
+
+```{python}
+class Conv2dDecoder(nn.Module):
+    def __init__(self):
+        super(Conv2dDecoder, self).__init__()
+        self.encoder = nn.ModuleList([
+            nn.ConvTranspose2d(8, 4, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False),
+            nn.ConvTranspose2d(4, 2, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False),
+            nn.ConvTranspose2d(2, 1, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False),
+            ])
+
+    def forward(self, x):
+        # TODO auto generage this info and pass it in when initializing.
+        expected_sizes = [
+            torch.Size([-1, 8, 4, 4]),
+            torch.Size([-1, 4, 7, 7]),
+            torch.Size([-1, 2, 14, 14]),
+            torch.Size([-1, 1, 28, 28])
+        ]
+
+        x = x.reshape((-1, 8, 4, 4))
+
+        for i in range(len(self.encoder)):
+            # print(x.shape)
+            x = self.encoder[i](x, output_size = expected_sizes[i+1])
+        return(x)
+                
+vae_dc = Conv2dDecoder()
+vae_dc( res2 ).shape
+```
+
+
+```{python}
+# using pl instead of train_vae
+class mnistVAE(pl.LightningModule):
+    def __init__(self, enc, rpm, smp, ex, dcd, kl_coeff = 0.1):
+        super().__init__()
+        self.enc = enc
+        self.rpm = rpm
+        self.smp = smp
+        self.ex = ex
+        self.dcd = dcd
+        
+        self.kl_coeff = kl_coeff
+
+    def forward(self, x):
+        mu, log_var = self.rpm(self.enc(x))
+        p, q, z = self.smp(mu, log_var)
+        xhat = self.dcd(self.ex(z))
+        return(xhat)
+
+    def embed(self, x):
+        mu, log_var = self.rpm(self.enc(x))
+        p, q, z = self.smp(mu, log_var)
+        # xhat = self.dcd(self.ex(z))
+        return(z)
+    
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        # x = x.to('cuda') # <-----------------------------------------------
+        mu, log_var = self.rpm(self.enc(x))
+        p, q, z = self.smp(mu, log_var)
+        xhat = self.dcd(self.ex(z))
+        # calculate loss
+        recon_loss = F.mse_loss(xhat, x, reduction='mean')
+        # reminder:
+        # p = normal(0ish, 1ish)
+        # q = normal(mu, std)
+        # z = sample(q)
+        log_qz = q.log_prob(z)
+        log_pz = p.log_prob(z)
+        
+        kl = log_qz - log_pz
+        kl = kl.mean()
+
+        kl *= self.kl_coeff
+
+        loss = kl + recon_loss
+
+        self.log('train_loss', loss)
+        # logs = {
+        #     "recon_loss": recon_loss,
+        #     "kl": kl,
+        #     "loss": loss,
+        # }
+        return loss#, logs
+
+
+        
+        # with torch.no_grad():
+        #     weight_list=[(name, param) for name, param in model.named_parameters() if name.split('.')[-1] == 'weight']
+        #     for l in weight_list:
+        #         self.log(("train_mean"+l[0]), l[1].mean())
+        #         self.log(("train_std"+l[0]), l[1].std())        
+        # return(loss)
+        
+#     def validation_step(self, batch, batch_idx):
+#         g_i, = batch
+#         pred, x, mu, log_var = self.mod(g_i)
+# #         loss = F.mse_loss(pred, y_i)
+#         self.log('val_loss', loss)        
+     
+    def configure_optimizers(self, **kwargs):
+        optimizer = torch.optim.Adam(self.parameters(), **kwargs)
+        return optimizer   
+
+
+test_vae = mnistVAE(
+    enc= Conv2dEncoder().to('cuda'),
+    rpm= Conv2dReparam(128, 256).to('cuda'),
+    smp= Conv2dSample().to('cuda'),
+    ex = Conv2dExpand(256, 128).to('cuda'),
+    dcd= Conv2dDecoder().to('cuda')
+).to('cuda')
+
+optimizer = test_vae.configure_optimizers()
+
+
+max_epoch = 2
+trainer = pl.Trainer(max_epochs=max_epoch)
+
+trainer.fit(
+    model=test_vae, 
+    train_dataloaders=training_dataloader
+    )
+```
+
+
+```{python}
+xs, ys = next(iter(training_dataloader))
+xhats = trainer.model(xs)
+show_samples = 5
+px.imshow(
+    torch.concat([
+        torch.concat([xs[i, ].squeeze() for i in range(show_samples)], axis = 0),
+        torch.concat([xhats[i, ].squeeze().detach() for i in range(show_samples)], axis = 0)], axis = 1))
+```
+
+
+```{python}
+# trainer.model.embed(xs)
+```
+
+```{python}
+y_vals = []
+x_latents = []
+
+with torch.no_grad():
+    for i, batch in enumerate(training_dataloader):
+        x, y = batch
+        # print(x.shape, y.shape)
+        # print(trainer.model.embed(x))
+        z = trainer.model.embed(x)
+        y_vals += [y]
+        x_latents += [z]
+```
+
+```{python}
+x_latents = torch.Tensor.numpy(torch.concat(x_latents))
+# torch.concat(y_vals)[mask]
+```
+
+```{python}
+from sklearn.manifold import TSNE
+
+mask = np.random.choice(x_latents.shape[0]-1, 5000)
+X_embedded = TSNE(n_components=2, learning_rate='auto',
+                  init='random', perplexity=3).fit_transform(
+                    x_latents[mask]
+                  )
+```
+
+```{python}
+px.scatter(
+    x = X_embedded[:, 0],
+    y = X_embedded[:, 1],
+    color= torch.concat(y_vals)[mask]
+)
+```
+
+```{python}
+"""
+Okay, I'm going to try redoing this with a resnet
+"""
+
+import torchvision
+torchvision.models.resnet18()
+```
+
+
+```{python}
+class ResBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size = 3, stride = 1, padding = 1, downsample = None):
+        super(ResBlock, self).__init__()
+        self.conv1 = nn.Sequential(
+                        nn.Conv2d(in_channels, out_channels, kernel_size = kernel_size, stride = stride, padding = padding),
+                        nn.BatchNorm2d(out_channels),
+                        nn.ReLU())
+        self.conv2 = nn.Sequential(
+                        nn.Conv2d(out_channels, out_channels, kernel_size = kernel_size, stride = stride, padding = padding),
+                        nn.BatchNorm2d(out_channels))
+        self.downsample = downsample
+        self.relu = nn.ReLU()
+        self.out_channels = out_channels
+
+    def forward(self, x):
+        residual = x
+        out = self.conv1(x)     # Note, these are both conv2d
+        out = self.conv2(out)   #
+        if self.downsample:
+            residual = self.downsample(x)
+        out += residual
+        out = self.relu(out)
+        return out
+
+res = ResBlock(in_channels=1, out_channels=1, kernel_size=3, stride=1, padding=1)
+res(x).shape
+```
+
+```{python}
+# x.shape
+x, y = next(iter(training_dataloader))
+```
+
+```{python}
+class ResConv2dEncoder(nn.Module):
+    def __init__(
+        self, 
+        input_shape = torch.Size([40, 1, 28, 28])
+        ):
+        super(ResConv2dEncoder, self).__init__()
+        self.encoder = nn.ModuleList([
+            ResBlock(in_channels=1,  out_channels=1, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(in_channels=1, out_channels=2, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False),
+
+            ResBlock(in_channels=2,  out_channels=2, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(in_channels=2, out_channels=4, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False),
+
+            ResBlock(in_channels=4,  out_channels=4, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(in_channels=4, out_channels=8, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False)
+            ])
+
+        # Find tensor sizes for each block adnd level
+        self.input_shape = input_shape
+        self.intermediate_shapes = []
+
+        x = torch.empty(self.input_shape)
+        with torch.no_grad():
+            for mod in self.encoder:
+                x = mod(x)
+                self.intermediate_shapes += [x.shape]
+        
+        # self.output_shape = self.intermediate_shapes.pop()
+        self.output_shape = self.intermediate_shapes[-1]
+        self.output_shape_flat = nn.Flatten()(x).shape
+        
+    def forward(self, x):
+        for mod in self.encoder:
+            # print(mod)
+            x = mod(x)
+            # print(x.shape)
+        return(x)
+    
+vae_en = ResConv2dEncoder()
+res = vae_en(x)
+res.shape
+```
+
+```{python}
+class ResConv2dDecoder(nn.Module):
+    def __init__(
+        self,
+        enc_intermediate_shapes    
+    ):
+        super(ResConv2dDecoder, self).__init__()
+        self.decoder = nn.ModuleList([
+            nn.ConvTranspose2d(in_channels=8, out_channels=4, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False),
+            ResBlock(          in_channels=4, out_channels=4, kernel_size=3, stride=1, padding=1),
+            nn.ConvTranspose2d(in_channels=4, out_channels=2, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False),
+            ResBlock(          in_channels=2, out_channels=2, kernel_size=3, stride=1, padding=1),
+            nn.ConvTranspose2d(in_channels=2, out_channels=1, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False),
+            ResBlock(          in_channels=1, out_channels=1, kernel_size=3, stride=1, padding=1),
+            ])
+        
+        self.input_shape = enc_intermediate_shapes.pop()
+        enc_intermediate_shapes.reverse()
+        self.intermediate_shapes = enc_intermediate_shapes#[1:] # Onve value here is the input 
+        # print(self.intermediate_shapes)
+
+    def forward(self, x):
+        # x = x.reshape((-1, 8, 4, 4))
+        x = x.reshape(self.input_shape)
+        # print(x.shape)
+        for i in range(len(self.decoder)):
+            # upsampling only happens in the nn.ConvTranspos2d layers so if we're running a ResBlock, we'll run it without an output_size
+            if 'ResBlock' in str(type(self.decoder[i])):
+                x = self.decoder[i](x)
+            else:    
+                # print(self.intermediate_shapes[i])
+                x = self.decoder[i](x, output_size = self.intermediate_shapes[i])
+            # print('_')
+            # print(x.shape)
+        return(x)
+                
+vae_dc = ResConv2dDecoder(enc_intermediate_shapes= vae_en.intermediate_shapes.copy())
+vae_dc(res).shape
+```
+
+```{python}
+latent_dims = 16
+
+vae_en   = ResConv2dEncoder()
+vae_rp   = Conv2dReparam(vae_en.output_shape_flat[1], latent_dims)
+vae_samp = Conv2dSample()
+vae_ex   = Conv2dExpand(latent_dims, vae_en.output_shape_flat[1])
+vae_dc   = ResConv2dDecoder(enc_intermediate_shapes= vae_en.intermediate_shapes.copy())
+
+# res = vae_en(x)
+# mu, log_var = vae_rp(res)
+# p, q, z = vae_samp(mu, log_var)
+# res2 = vae_ex(z)
+# vae_dc(res).shape
+```
+
+```{python}
+
+test_vae = mnistVAE(
+    enc= vae_en.to('cuda'),
+    rpm= vae_rp.to('cuda'),
+    smp= vae_samp.to('cuda'),
+    ex = vae_ex.to('cuda'),
+    dcd= vae_dc.to('cuda')
+)#.to('cuda')
+
+optimizer = test_vae.configure_optimizers()
+
+max_epoch = 2
+trainer = pl.Trainer(max_epochs=max_epoch)
+
+trainer.fit(
+    model=test_vae, 
+    train_dataloaders=training_dataloader
+    )
+```
+
+```{python}
+xs, ys = next(iter(training_dataloader))
+xhats = trainer.model(xs)
+show_samples = 5
+px.imshow(
+    torch.concat([
+        torch.concat([xs[i, ].squeeze() for i in range(show_samples)], axis = 0),
+        torch.concat([xhats[i, ].squeeze().detach() for i in range(show_samples)], axis = 0)], axis = 1))
+        
+```
+
+```{python}
+y_vals = []
+x_latents = []
+
+with torch.no_grad():
+    for i, batch in enumerate(training_dataloader):
+        x, y = batch
+        # print(x.shape, y.shape)
+        # print(trainer.model.embed(x))
+        z = trainer.model.embed(x)
+        y_vals += [y]
+        x_latents += [z]
+x_latents = torch.Tensor.numpy(torch.concat(x_latents))
+# torch.concat(y_vals)[mask]
+```
+
+```{python}
+px.scatter(
+    x = x_latents[mask, 0],
+    y = x_latents[mask, 1],
+    color= torch.concat(y_vals)[mask]
+)
+```
+
+```{python}
+
+mask = np.random.choice(x_latents.shape[0]-1, 5000)
+X_embedded = TSNE(n_components=2, learning_rate='auto',
+                  init='random', perplexity=3).fit_transform(
+                    x_latents[mask]
+                  )
+```
+
+```{python}
+px.scatter(
+    x = X_embedded[:, 0],
+    y = X_embedded[:, 1],
+    color= torch.concat(y_vals)[mask]
+)
+```
+
+## Okay, now move into weather
+
+```{python}
+# Reinstantiate weather dataloader
+training_dataloader = DataLoader(
+    BigDataset(
+        lookup_obs = list(set(obs_env_lookup[:, 2])),
+        lookup_env = torch.from_numpy(obs_env_lookup).to(device),
+        P = torch.from_numpy(PlantHarvest).to(device),
+        W = torch.from_numpy(WMat_hilb).to(device).to(torch.float32),
+        W_type = 'hilbert',
+    ),
+    batch_size = 50,
+    shuffle = True
+)
+```
+
+```{python}
+x = next(iter(training_dataloader))[0]
+px.imshow(torch.Tensor.numpy(x[0, 0, :, :].detach().cpu()))
+```
+
+
+```{python}
+class ResConv2dEncoder(nn.Module):
+    def __init__(
+        self, 
+        input_shape #= torch.Size([40, 1, 28, 28])
+        ):
+        super(ResConv2dEncoder, self).__init__()
+        self.encoder = nn.ModuleList([
+            # ResBlock( in_channels=17,   out_channels=17,   kernel_size=3,      stride=1,     padding=1),
+            nn.Conv2d(in_channels=17,   out_channels=2*17, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False),
+
+            ResBlock( in_channels=2*17, out_channels=2*17, kernel_size=3,      stride=1,     padding=1),
+            nn.Conv2d(in_channels=2*17, out_channels=4*17, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False),
+
+            ResBlock( in_channels=4*17, out_channels=4*17, kernel_size=3,      stride=1,     padding=1),
+            nn.Conv2d(in_channels=4*17, out_channels=8*17, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False),
+
+            ResBlock( in_channels=8*17, out_channels=8*17, kernel_size=3,      stride=1,     padding=1),
+            nn.Conv2d(in_channels=8*17, out_channels=16*17, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False)            
+            ])
+
+        # Find tensor sizes for each block adnd level
+        self.input_shape = input_shape
+        self.intermediate_shapes = [input_shape]
+
+        x = torch.empty(self.input_shape)
+        with torch.no_grad():
+            for mod in self.encoder:
+                x = mod(x)
+                self.intermediate_shapes += [x.shape]
+        
+        # self.output_shape = self.intermediate_shapes.pop()
+        self.output_shape = self.intermediate_shapes[-1]
+        self.output_shape_flat = nn.Flatten()(x).shape
+        
+    def forward(self, x):
+        for mod in self.encoder:
+            # print(mod)
+            x = mod(x)
+            # print(x.shape)
+        return(x)
+    
+vae_en = ResConv2dEncoder(input_shape = next(iter(training_dataloader))[0].shape ).to('cuda')
+res = vae_en(x)
+vae_en.intermediate_shapes
+```
+
+
+```{python}
+class ResConv2dDecoder(nn.Module):
+    def __init__(
+        self,
+        enc_intermediate_shapes    
+    ):
+        super(ResConv2dDecoder, self).__init__()
+        self.decoder = nn.ModuleList([
+            # nn.ConvTranspose2d(in_channels=16*17 , out_channels=8*17, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False),    
+            # ResBlock(          in_channels=8*17 , out_channels=8*17, kernel_size=3,      stride=1,     padding=1),
+            
+            # nn.ConvTranspose2d(in_channels=8*17 , out_channels=4*17, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False),
+            # ResBlock(          in_channels=4*17 , out_channels=4*17, kernel_size=3,      stride=1,     padding=1),
+            
+            # nn.ConvTranspose2d(in_channels=4*17 , out_channels=2*17, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False),
+            # ResBlock(          in_channels=2*17 , out_channels=2*17, kernel_size=3,      stride=1,     padding=1),
+            
+            # nn.ConvTranspose2d(in_channels=2*17,  out_channels=17, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False),
+            # ResBlock(          in_channels=17,    out_channels=17,   kernel_size=3,      stride=1,     padding=1),
+
+
+
+            
+            nn.ConvTranspose2d(in_channels=16*17 , out_channels=8*17, kernel_size=(6, 6), stride=(2,2), padding=(2, 2), bias=False),    
+            ResBlock(          in_channels=8*17 , out_channels=8*17, kernel_size=3,      stride=1,     padding=1),
+            
+            nn.ConvTranspose2d(in_channels=8*17 , out_channels=4*17, kernel_size=(6, 6), stride=(2,2), padding=(2, 2), bias=False),
+            ResBlock(          in_channels=4*17 , out_channels=4*17, kernel_size=3,      stride=1,     padding=1),
+            
+            nn.ConvTranspose2d(in_channels=4*17 , out_channels=2*17, kernel_size=(6, 6), stride=(2,2), padding=(2, 2), bias=False),
+            ResBlock(          in_channels=2*17 , out_channels=2*17, kernel_size=3,      stride=1,     padding=1),
+            
+            nn.ConvTranspose2d(in_channels=2*17,  out_channels=17, kernel_size=(6, 6), stride=(2,2), padding=(2, 2), bias=False),
+            ])
+        
+        # overwrite first value with -1
+        vals = [list(e) for e in enc_intermediate_shapes.copy()]
+        vals = [tuple([-1]+e[1:]) for e in vals]
+        # self.input_shape = vals[-1] #.pop()
+        self.input_shape = vals.pop()
+        vals.reverse()
+        self.intermediate_shapes = vals#[1:] # Onve value here is the input 
+        # print(self.intermediate_shapes)
+ 
+    def forward(self, x):
+        # x = x.reshape((-1, 8, 4, 4))
+        x = x.reshape(self.input_shape)
+        # print(x.shape)
+        for i in range(len(self.decoder)):
+            # upsampling only happens in the nn.ConvTranspos2d layers so if we're running a ResBlock, we'll run it without an output_size
+            if 'ResBlock' in str(type(self.decoder[i])):
+                x = self.decoder[i](x)
+            else:    
+                # print(self.intermediate_shapes[i])
+                x = self.decoder[i](x, output_size = self.intermediate_shapes[i])
+            # print('_')
+            # print(x.shape)
+        return(x)
+                
+vae_dc = ResConv2dDecoder(enc_intermediate_shapes= vae_en.intermediate_shapes.copy()).to('cuda')
+# print(vae_dc.intermediate_shapes)
+vae_dc(res).shape
+
+```
+
+
+```{python}
+latent_dims = 16
+
+vae_en   = ResConv2dEncoder(input_shape = next(iter(training_dataloader))[0].shape )
+vae_rp   = Conv2dReparam(vae_en.output_shape_flat[1], latent_dims)
+vae_samp = Conv2dSample()
+vae_ex   = Conv2dExpand(latent_dims, vae_en.output_shape_flat[1])
+vae_dc   = ResConv2dDecoder(enc_intermediate_shapes= vae_en.intermediate_shapes.copy())
+
+vae_en = vae_en.to('cuda')
+vae_rp = vae_rp.to('cuda')
+vae_samp = vae_samp.to('cuda')
+vae_ex = vae_ex.to('cuda')
+vae_dc = vae_dc.to('cuda')
+```
+
+```{python}
+
+class wthrVAE(pl.LightningModule):
+    def __init__(self, enc, rpm, smp, ex, dcd, kl_coeff = 0.1):
+        super().__init__()
+        self.enc = enc
+        self.rpm = rpm
+        self.smp = smp
+        self.ex = ex
+        self.dcd = dcd
+        
+        self.kl_coeff = kl_coeff
+
+    def forward(self, x):
+        mu, log_var = self.rpm(self.enc(x))
+        p, q, z = self.smp(mu, log_var)
+        xhat = self.dcd(self.ex(z))
+        return(xhat)
+
+    def embed(self, x):
+        mu, log_var = self.rpm(self.enc(x))
+        p, q, z = self.smp(mu, log_var)
+        return(z)
+    
+    def training_step(self, batch, batch_idx):
+        x = batch[0]        
+        mu, log_var = self.rpm(self.enc(x))
+        p, q, z = self.smp(mu, log_var)
+        xprime = self.ex(z)
+        xhat = self.dcd(xprime)
+        # calculate loss
+        recon_loss = F.mse_loss(xhat, x, reduction='mean')
+        log_qz = q.log_prob(z)
+        log_pz = p.log_prob(z)
+        kl = log_qz - log_pz
+        kl = kl.mean()
+        kl *= self.kl_coeff
+        loss = kl + recon_loss
+        self.log('train_loss', loss)
+        return loss#, logs
+     
+    def configure_optimizers(self, **kwargs):
+        optimizer = torch.optim.Adam(self.parameters(), **kwargs)
+        return optimizer   
+
+test_vae = wthrVAE(
+    enc= vae_en,
+    rpm= vae_rp,
+    smp= vae_samp,
+    ex = vae_ex,
+    dcd= vae_dc
+)#.to('cuda')
+
+optimizer = test_vae.configure_optimizers()
+
+max_epoch = 100
+trainer = pl.Trainer(max_epochs=max_epoch)
+
+trainer.fit(
+    model=test_vae, 
+    train_dataloaders=training_dataloader
+    )
+```
+
+```{python}
+x = next(iter(training_dataloader))[0]
+px.imshow(
+    np.concatenate([
+        torch.Tensor.numpy(x[0, 0, :, :].detach().cpu()),
+        torch.Tensor.numpy(trainer.model(x.to('cpu')).detach())[0, 0, :, :]
+        ]))
+```
+
+
+
+```{python}
+xs = next(iter(training_dataloader))[0]
+xhats = trainer.model(xs)
+
+show_samples = 5
+px.imshow(
+    torch.concat([
+        torch.concat([xs[i, ].squeeze() for i in range(show_samples)], axis = 0),
+        torch.concat([xhats[i, ].squeeze().detach() for i in range(show_samples)], axis = 0)], axis = 1))
+        
+```
+
+```{python}
+y_vals = []
+x_latents = []
+
+with torch.no_grad():
+    for i, batch in enumerate(training_dataloader):
+        x = batch[0]
+        # print(x.shape, y.shape)
+        # print(trainer.model.embed(x))
+        z = trainer.model.embed(x)
+        y_vals += [y]
+        x_latents += [z]
+x_latents = torch.Tensor.numpy(torch.concat(x_latents))
+# torch.concat(y_vals)[mask]
+```
+
+```{python}
+px.scatter(
+    x = x_latents[mask, 0],
+    y = x_latents[mask, 1],
+    color= torch.concat(y_vals)[mask]
+)
+```
+
+```{python}
+
+mask = np.random.choice(x_latents.shape[0]-1, 5000)
+X_embedded = TSNE(n_components=2, learning_rate='auto',
+                  init='random', perplexity=3).fit_transform(
+                    x_latents[mask]
+                  )
+```
+
+```{python}
+px.scatter(
+    x = X_embedded[:, 0],
+    y = X_embedded[:, 1],
+    color= torch.concat(y_vals)[mask]
+)
+```
+
+
+
+
+
+
+```{python}
+input_shape = torch.Size([40, 1, 28, 28])
+x = torch.empty(input_shape)
+print(x.shape)
+
+for mod in vae_en.encoder:
+    print(mod)
+    x = mod(x)
+    print(x.shape)
+
+# # with torch.no_grad():
+# print(self.encoder)
+# for mod in self.encoder:
+#     print(x.shape)
+#     x = mod(x)
+#     print(x.shape)
+# print('------------------------------------')
+```
+
+```{python}
+class ResNet(nn.Module):  
+    def _make_layer(self, 
+                    block, # this is the residual block class
+                    planes,
+                    blocks, 
+                    stride=1):
+        downsample = None
+        if stride != 1 or self.inplanes != planes:
+            
+            downsample = nn.Sequential(
+                nn.Conv2d(self.inplanes, planes, kernel_size=1, stride=stride),
+                nn.BatchNorm2d(planes),
+            )
+        layers = []
+        layers.append(block(self.inplanes, planes, stride, downsample))
+        self.inplanes = planes
+        for i in range(1, blocks):
+            layers.append(block(self.inplanes, planes))
+
+        return nn.Sequential(*layers)
+    
+    def __init__(self, block, layers, num_classes = 10):
+        super(ResNet, self).__init__()
+        self.inplanes = 64
+        self.conv1 = nn.Sequential(
+                        nn.Conv2d(3, 64, kernel_size = 7, stride = 2, padding = 3),
+                        nn.BatchNorm2d(64),
+                        nn.ReLU())
+        self.maxpool = nn.MaxPool2d(kernel_size = 3, stride = 2, padding = 1)
+        self.layer0 = self._make_layer(block, 64, layers[0], stride = 1)
+        self.layer1 = self._make_layer(block, 128, layers[1], stride = 2)
+        self.layer2 = self._make_layer(block, 256, layers[2], stride = 2)
+        self.layer3 = self._make_layer(block, 512, layers[3], stride = 2)
+        self.avgpool = nn.AvgPool2d(7, stride=1)
+        self.fc = nn.Linear(512, num_classes)
+        
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.maxpool(x)
+        x = self.layer0(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+
+        x = self.avgpool(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+
+        return x
+
+mod = ResNet(ResBlock, layers = [3, 4, 6, 3], num_classes = 10)
+```
+
+```{python}
+mod
+```
+
+```{python}
+class Conv2dEncoder(nn.Module):
+    def __init__(self):
+        super(Conv2dEncoder, self).__init__()
+        self.encoder = nn.ModuleList([
+            nn.Conv2d(1, 2, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False),
+            nn.Conv2d(2, 4, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False),
+            nn.Conv2d(4, 8, kernel_size=(7, 7), stride=(2,2), padding=(3,3), bias=False)
+            ])
+
+    def forward(self, x):
+        for mod in self.encoder:
+             x = mod(x)
+            #  print(x.shape)
+        return(x)
+    
+vae_en = Conv2dEncoder()
+vae_en(x).shape
+```
+
+
+
+
+
+
+```{python}
+# using pl instead of train_vae
+class plVAE(pl.LightningModule):
+    def __init__(self, mod):
+        super().__init__()
+        self.mod = mod
+        
+    def training_step(self, batch, batch_idx):
+        g_i, = batch
+        pred, x, mu, log_var = self.mod(g_i)
+        
+#         inverse_batches = 1/len(training_dataloader)
+        
+        loss = vae.loss_function(*x_hat, M_N = inverse_batches)
+        
+#         loss = F.mse_loss(pred, y_i)
+        self.log("train_loss", loss)
+        
+        with torch.no_grad():
+            weight_list=[(name, param) for name, param in model.named_parameters() if name.split('.')[-1] == 'weight']
+            for l in weight_list:
+                self.log(("train_mean"+l[0]), l[1].mean())
+                self.log(("train_std"+l[0]), l[1].std())        
+        return(loss)
+        
+    def validation_step(self, batch, batch_idx):
+        g_i, = batch
+        pred, x, mu, log_var = self.mod(g_i)
+#         loss = F.mse_loss(pred, y_i)
+        self.log('val_loss', loss)        
+     
+    def configure_optimizers(self, **kwargs):
+        optimizer = torch.optim.Adam(self.parameters(), **kwargs)
+        return optimizer   
+```
+
+```{python}
+# px.imshow(torch.Tensor.numpy(x.detach().to('cpu')))
+# x = next(iter(training_dataloader))[0]
+```
+
+```{python}
+mod = nn.Sequential(nn.Conv2d(17, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False),
+#                     torch.Size([1, 64, 8, 16])
+                    nn.Conv2d(64, 17, kernel_size=(7, 7), stride=(1, 1), padding=(3, 3), bias=False),
+#                     torch.Size([1, 17, 8, 16])
+#                     nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+#                     nn.ConvTranspose2d(17, 17, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False),
+#                     nn.Upsample(#scale_factor=2, 
+#                         mode='bilinear', align_corners=True)
+
+                   )
+#                     torch.Size([1, 17, 16, 32])
+
+
+mod.to(device)
+xout = mod(x)
+xout.shape
+```
+
+```{python}
+mod2 = nn.ConvTranspose2d(17, 17, kernel_size=3, stride = 2, padding=1).to(device)
+mod2(xout, output_size = torch.Size([1, 17, 15, 31])).shape
+```
+
+```{python}
+x.size()
+```
+
+```{python}
+torch.randn(1, 16, 12, 12).size()
+```
+
+```{python}
+import torchvision
+torchvision.models.resnet18()
+```
+
+```{python}
+x
+
+```
+
+```{python}
+# using models in https://github.com/AntixK/PyTorch-VAE as reference
+class CNNVAE(nn.Module):
+    def __init__(self,
+                 in_channels = 17, 
+                 hidden_dims = [32, 64],
+                 latent_dims = 1024, 
+                 obs_shape = (1, 17, 365) # needed to figure out the right dim between latents and en/decoders
+                ):
+        super(CNNVAE, self).__init__()
+        ## Encoder =================================================================================
+        hidden_dims = [in_channels]+hidden_dims
+        modules = []
+        for i in range(len(hidden_dims) - 1):
+#             print(hidden_dims[i], hidden_dims[i+1])
+            modules.append(
+                nn.Sequential(
+                    nn.Conv1d(hidden_dims[i], out_channels=hidden_dims[i+1],
+                              kernel_size= 3, stride= 2, padding  = 1),
+                    nn.BatchNorm1d(hidden_dims[i+1]),
+                    nn.LeakyReLU()
+                )
+            )
+        self.encoder = nn.Sequential(*modules)
+
+    
+#         modules = []
+#         for h_dim in hidden_dims:
+#             modules.append(
+#                 nn.Sequential(
+#                     nn.Conv1d(in_channels, out_channels=h_dim,
+#                               kernel_size= 3, stride= 2, padding  = 1),
+#                     nn.BatchNorm1d(h_dim),
+#                     nn.LeakyReLU())
+#             )
+#             in_channels = h_dim
+#         self.encoder = nn.Sequential(*modules)
+
+        ### Now set up functions to get mu/var .....................................................
+        # this code uses a work around to find an acceptable input dim for the linear layer that  
+        # connects the encoder's flatten and produces the latents with the fc_mu/fc_var methods. 
+        # In the example code this value is `hidden_dims[-1]*4`. That may be specific to the 2D case
+        # or may be specific to their chosen structure.
+        # it works by 
+        # 1. make a tensor of the same shape of one obs and
+        # 2. pass it through the encoder
+        # 3. for a 1d conv, retain the last 2 dims
+        # 4. take the product to get the input size for fc_mu/fc_var
+        collapse_dims = self.encoder(torch.zeros(obs_shape)).shape[-2:]
+        self.collapse_dims = collapse_dims
+        print(collapse_dims)
+        adjacent_dims = int(torch.prod(torch.tensor(collapse_dims)))
+#         print(adjacent_dims)
+
+        self.fc_mu = nn.Linear(adjacent_dims, latent_dims)
+        self.fc_var = nn.Linear(adjacent_dims, latent_dims)
+
+        ## Decoder =================================================================================
+        self.decoder_input = nn.Linear(latent_dims, adjacent_dims)
+        hidden_dims.reverse()
+        # add in the output channels
+#         hidden_dims += [in_channels]
+#         print(hidden_dims)
+        modules = []
+        
+        ### Figure out the right output_padding of a given number of layers ........................
+        # This is a perhaps less efficient way to do this (Instead of calculating the Lout)
+        # increment list
+        def increment_list(
+            in_list = [0, 0, 0],
+            min_value = 0,
+            max_value = 1):
+            # Check that all entries are within min/max
+            if False in [True if e <= max_value else False for e in in_list]:
+                print('Value(s) above maximum!')
+            elif False in [True if e >= min_value else False for e in in_list]:
+                print('Value(s) below minimum!')
+            elif [e for e in in_list if e != max_value] == []:
+                print('List at maximum value!')
+            else:    
+                # start cursor at first non-max value
+                for i in range(len(in_list)):
+                    if in_list[i] < max_value:
+                        in_list[i] += 1
+                        break
+                    else:
+                        in_list[i] = min_value
+            return(in_list)
+        
+        layer_output_padding = [0 for e in range(len(hidden_dims)-1)]
+        while True:
+            old_layer_output_padding = layer_output_padding.copy()
+            
+            ne = nn.ModuleList([
+                nn.Sequential(nn.Conv1d(
+                obs_shape[1], out_channels=obs_shape[1], kernel_size= 3, stride= 2, padding  = 1), nn.BatchNorm1d(
+                obs_shape[1]), nn.LeakyReLU())
+                for i in range(len(layer_output_padding))
+            ])
+
+            nd = nn.ModuleList([
+                nn.Sequential(nn.ConvTranspose1d(
+                obs_shape[1], obs_shape[1], 
+                kernel_size=3, stride = 2, padding=1, output_padding=layer_output_padding[i]), nn.BatchNorm1d(
+                obs_shape[1]), nn.LeakyReLU())
+                for i in range(len(layer_output_padding))
+            ])
+            
+            tensor_Ls = []
+            xin = torch.zeros(obs_shape)
+            tensor_Ls += [list(xin.shape)[-1]]
+            for mod in ne:
+                xin = mod(xin)
+                tensor_Ls += [list(xin.shape)[-1]]
+            tensor_Ls += [str(tensor_Ls[-1])]
+            for mod in nd:
+                xin = mod(xin)
+                tensor_Ls += [list(xin.shape)[-1]]
+
+            if False == (tensor_Ls[0] == tensor_Ls[-1]):
+                layer_output_padding = increment_list(
+                    in_list = layer_output_padding,
+                    min_value = 0,
+                    max_value = 1)
+            else:
+                pass
+#                 print('done!')
+
+            if layer_output_padding == old_layer_output_padding: 
+                break
+        #tensor_Ls                
+        self.layer_output_padding = layer_output_padding
+        
+        ### Now create decoder network .............................................................
+#         print(len(hidden_dims))
+#         print(hidden_dims)
+#         print(len(layer_output_padding))
+#         print(layer_output_padding)
+    
+        for i in range(len(hidden_dims) - 1): 
+            if i  !=  (len(hidden_dims) - 2): 
+                modules.append(
+                    nn.Sequential(
+                        nn.ConvTranspose1d(hidden_dims[i],
+                                           hidden_dims[i + 1],
+                                           kernel_size=3,
+                                           stride = 2,
+                                           padding=1,
+                                           output_padding=layer_output_padding[i]),
+                        nn.BatchNorm1d(hidden_dims[i + 1]),
+                        nn.LeakyReLU()
+                    )
+                )
+            else: # last layer
+                modules.append(
+                    nn.Sequential(
+                        nn.ConvTranspose1d(hidden_dims[i],
+                                           hidden_dims[i + 1],
+                                           kernel_size=3,
+                                           stride = 2,
+                                           padding=1,
+                                           output_padding=layer_output_padding[i])
+#                         nn.Tanh()
+#                             
+                    )
+                )        
+        self.decoder = nn.Sequential(*modules)
+        self.decoder_last_layer = nn.Linear(obs_shape[-1], obs_shape[-1])
+        
+
+#         self.final_layer = nn.Sequential(
+#                             nn.ConvTranspose1d(hidden_dims[-1],
+#                                                hidden_dims[-1],
+#                                                kernel_size=3,
+#                                                stride=2,
+#                                                padding=1,
+#                                                output_padding=1),
+#                             nn.BatchNorm1d(hidden_dims[-1]),
+#                             nn.LeakyReLU(),
+#                             nn.Conv1d(hidden_dims[-1], out_channels= 3,
+#                                       kernel_size= 3, padding= 1),
+#                             nn.Tanh())
+        
+    def encode(self, x):
+        res = self.encoder(x)
+        res = torch.flatten(res, start_dim = 1)
+        mu = self.fc_mu(res)
+        log_var = self.fc_var(res)
+        return [mu, log_var]
+
+    def decode(self, z):
+        z = self.decoder_input(z)
+        z = z.reshape(tuple([-1]+list(self.collapse_dims)))
+        out = self.decoder(z) # this is more complex if it's a cnn. The example uses an adapter layer
+        out = self.decoder_last_layer(out)
+        return(out)
+
+    def (self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        return eps * std + mu
+
+    def forward(self, x, **kwargs):
+        mu, log_var = self.encode(x)
+        z = self.reparameterize(mu, log_var)
+        return [self.decode(z), x, mu, log_var]
+
+    def loss_function(self, *args, **kwargs):
+        recons = args[0]
+        x = args[1]
+        mu = args[2]
+        log_var = args[3]
+
+        kld_weight = kwargs['M_N'] # Account for the minibatch samples from the dataset
+
+        recons_loss =F.mse_loss(recons, x)
+        kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
+
+        loss = recons_loss + kld_weight * kld_loss
+        return loss
+    
+        def sample(self, num_samples, current_device, **kwargs):
+            z = torch.randn(num_samples, self.latent_dim)
+            z = z.to(current_device)
+            samples = self.decode(z)
+            return samples        
+        def generate(self, x):
+            return self.forward(x)[0]      
+
+vae = CNNVAE(
+    in_channels = 17,   
+    hidden_dims = [16, 32, 64, 128, 256, 512, 
+                  ],
+    latent_dims = 1024,
+    obs_shape = (1, 17, 365)).to(device)
+
+# vae.decoder
+```
+
+```{python}
+vae.decode(vae.reparameterize(*vae.encode(x))).shape
+```
+
+```{python}
+def train_vae(
+    vae,
+    data,
+    epochs=20,
+    verbose = False
+):    
+    opt = torch.optim.AdamW(vae.parameters())
+    for epoch in tqdm(range(epochs)):
+        for x in data:
+            opt.zero_grad()
+            x_hat = vae(x[0]) # <------------------------- note, using 0th entry in the output
+            inverse_batches = 1/len(training_dataloader)
+            loss = vae.loss_function(*x_hat, M_N = inverse_batches)
+            loss.backward()
+            opt.step()
+            if torch.isinf(loss):
+                print('Loss is inf')
+                break
+            if torch.isnan(loss):
+                print('Loss is nan')
+                break
+        if verbose:
+            print(f'loss {loss}')
+        if torch.isinf(loss) or torch.isnan(loss):
+            break
+```
+
+```{python}
+train_vae(
+    vae = vae,
+    data = training_dataloader,
+    epochs=2,
+    verbose = False)
+```
+
+```{python}
+# using models in https://github.com/AntixK/PyTorch-VAE as reference
+
+
+
+class CNNVAE(nn.Module):
+    def __init__(self,
+                 in_channels = 17, 
+                 hidden_dims = [32, 64],
+                 latent_dims = 1024, 
+                 obs_shape = (1, 17, 365) # needed to figure out the right dim between latents and en/decoders
+                ):
+        super(CNNVAE, self).__init__()
+        ## Encoder =================================================================================
+        hidden_dims = [in_channels]+hidden_dims
+        modules = []
+        for i in range(len(hidden_dims) - 1):
+
+            modules.append(
+                nn.Sequential(
+                    nn.Conv1d(hidden_dims[i], out_channels=hidden_dims[i+1],
+                              kernel_size= 3, stride= 2, padding  = 1),
+                    nn.BatchNorm1d(hidden_dims[i+1]),
+                    nn.LeakyReLU()
+                )
+            )
+        self.encoder = nn.Sequential(*modules)
+        ### Now set up functions to get mu/var .....................................................
+        # this code uses a work around to find an acceptable input dim for the linear layer that  
+        # connects the encoder's flatten and produces the latents with the fc_mu/fc_var methods. 
+        # In the example code this value is `hidden_dims[-1]*4`. That may be specific to the 2D case
+        # or may be specific to their chosen structure.
+        # it works by 
+        # 1. make a tensor of the same shape of one obs and
+        # 2. pass it through the encoder
+        # 3. for a 1d conv, retain the last 2 dims
+        # 4. take the product to get the input size for fc_mu/fc_var
+        collapse_dims = self.encoder(torch.zeros(obs_shape)).shape[-2:]
+        self.collapse_dims = collapse_dims
+        print(collapse_dims)
+        adjacent_dims = int(torch.prod(torch.tensor(collapse_dims)))
+
+        self.fc_mu = nn.Linear(adjacent_dims, latent_dims)
+        self.fc_var = nn.Linear(adjacent_dims, latent_dims)
+
+        ## Decoder =================================================================================
+        self.decoder_input = nn.Linear(latent_dims, adjacent_dims)
+        hidden_dims.reverse()
+        # add in the output channels
+        modules = []
+        
+        ### Figure out the right output_padding of a given number of layers ........................
+        # This is a perhaps less efficient way to do this (Instead of calculating the Lout)
+        # increment list
+        def increment_list(
+            in_list = [0, 0, 0],
+            min_value = 0,
+            max_value = 1):
+            # Check that all entries are within min/max
+            if False in [True if e <= max_value else False for e in in_list]:
+                print('Value(s) above maximum!')
+            elif False in [True if e >= min_value else False for e in in_list]:
+                print('Value(s) below minimum!')
+            elif [e for e in in_list if e != max_value] == []:
+                print('List at maximum value!')
+            else:    
+                # start cursor at first non-max value
+                for i in range(len(in_list)):
+                    if in_list[i] < max_value:
+                        in_list[i] += 1
+                        break
+                    else:
+                        in_list[i] = min_value
+            return(in_list)
+        
+        layer_output_padding = [0 for e in range(len(hidden_dims)-1)]
+        while True:
+            old_layer_output_padding = layer_output_padding.copy()
+            
+            ne = nn.ModuleList([
+                nn.Sequential(nn.Conv1d(
+                obs_shape[1], out_channels=obs_shape[1], kernel_size= 3, stride= 2, padding  = 1), nn.BatchNorm1d(
+                obs_shape[1]), nn.LeakyReLU())
+                for i in range(len(layer_output_padding))
+            ])
+
+            nd = nn.ModuleList([
+                nn.Sequential(nn.ConvTranspose1d(
+                obs_shape[1], obs_shape[1], 
+                kernel_size=3, stride = 2, padding=1, output_padding=layer_output_padding[i]), nn.BatchNorm1d(
+                obs_shape[1]), nn.LeakyReLU())
+                for i in range(len(layer_output_padding))
+            ])
+            
+            tensor_Ls = []
+            xin = torch.zeros(obs_shape)
+            tensor_Ls += [list(xin.shape)[-1]]
+            for mod in ne:
+                xin = mod(xin)
+                tensor_Ls += [list(xin.shape)[-1]]
+            tensor_Ls += [str(tensor_Ls[-1])]
+            for mod in nd:
+                xin = mod(xin)
+                tensor_Ls += [list(xin.shape)[-1]]
+
+            if False == (tensor_Ls[0] == tensor_Ls[-1]):
+                layer_output_padding = increment_list(
+                    in_list = layer_output_padding,
+                    min_value = 0,
+                    max_value = 1)
+            else:
+                pass
+#                 print('done!')
+
+            if layer_output_padding == old_layer_output_padding: 
+                break
+        #tensor_Ls                
+        self.layer_output_padding = layer_output_padding
+        
+        ### Now create decoder network .............................................................
+        for i in range(len(hidden_dims) - 1): 
+            if i  !=  (len(hidden_dims) - 2): 
+                modules.append(
+                    nn.Sequential(
+                        nn.ConvTranspose1d(hidden_dims[i],
+                                           hidden_dims[i + 1],
+                                           kernel_size=3,
+                                           stride = 2,
+                                           padding=1,
+                                           output_padding=layer_output_padding[i]),
+                        nn.BatchNorm1d(hidden_dims[i + 1]),
+                        nn.LeakyReLU()
+                    )
+                )
+            else: # last layer
+                modules.append(
+                    nn.Sequential(
+                        nn.ConvTranspose1d(hidden_dims[i],
+                                           hidden_dims[i + 1],
+                                           kernel_size=3,
+                                           stride = 2,
+                                           padding=1,
+                                           output_padding=layer_output_padding[i])
+                    )
+                )        
+        self.decoder = nn.Sequential(*modules)
+        self.decoder_last_layer = nn.Linear(obs_shape[-1], obs_shape[-1])
+        
+    def encode(self, x):
+        res = self.encoder(x)
+        res = torch.flatten(res, start_dim = 1)
+        mu = self.fc_mu(res)
+        log_var = self.fc_var(res)
+        return [mu, log_var]
+
+    def decode(self, z):
+        z = self.decoder_input(z)
+        z = z.reshape(tuple([-1]+list(self.collapse_dims)))
+        out = self.decoder(z) # this is more complex if it's a cnn. The example uses an adapter layer
+        out = self.decoder_last_layer(out)
+        return(out)
+
+    def (self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        return eps * std + mu
+
+    def forward(self, x, **kwargs):
+        mu, log_var = self.encode(x)
+        z = self.reparameterize(mu, log_var)
+        return [self.decode(z), x, mu, log_var]
+
+    def loss_function(self, *args, **kwargs):
+        recons = args[0]
+        x = args[1]
+        mu = args[2]
+        log_var = args[3]
+
+        kld_weight = kwargs['M_N'] # Account for the minibatch samples from the dataset
+
+        recons_loss =F.mse_loss(recons, x)
+        kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
+
+        loss = recons_loss + kld_weight * kld_loss
+        return loss
+    
+        def sample(self, num_samples, current_device, **kwargs):
+            z = torch.randn(num_samples, self.latent_dim)
+            z = z.to(current_device)
+            samples = self.decode(z)
+            return samples        
+        def generate(self, x):
+            return self.forward(x)[0]      
+
+# vae = CNNVAE(
+#     in_channels = 17,   
+#     hidden_dims = [16, 32, 64, 128, 256, 512, 
+#                   ],
+#     latent_dims = 1024,
+#     obs_shape = (1, 17, 365)).to(device)
+
+# vae.decoder
+```
+
+```{python}
+# using pl instead of train_vae
+class plVAE(pl.LightningModule):
+    def __init__(self, mod):
+        super().__init__()
+        self.mod = mod
+        
+    def training_step(self, batch, batch_idx):
+        g_i, = batch
+        pred, x, mu, log_var = self.mod(g_i)
+        
+#         inverse_batches = 1/len(training_dataloader)
+        
+        loss = vae.loss_function(*x_hat, M_N = inverse_batches)
+        
+#         loss = F.mse_loss(pred, y_i)
+        self.log("train_loss", loss)
+        
+        with torch.no_grad():
+            weight_list=[(name, param) for name, param in model.named_parameters() if name.split('.')[-1] == 'weight']
+            for l in weight_list:
+                self.log(("train_mean"+l[0]), l[1].mean())
+                self.log(("train_std"+l[0]), l[1].std())        
+        return(loss)
+        
+    def validation_step(self, batch, batch_idx):
+        g_i, = batch
+        pred, x, mu, log_var = self.mod(g_i)
+#         loss = F.mse_loss(pred, y_i)
+        self.log('val_loss', loss)        
+     
+    def configure_optimizers(self, **kwargs):
+        optimizer = torch.optim.Adam(self.parameters(), **kwargs)
+        return optimizer   
+```
+
+
+
+```{python}
+# using models in https://github.com/AntixK/PyTorch-VAE as reference
+class CNN2VAE(nn.Module):
+    def __init__(self,
+                 in_channels = 17, 
+                 hidden_dims = [32, 64],
+                 latent_dims = 1024, 
+                 obs_shape = (1, 17, 365) # needed to figure out the right dim between latents and en/decoders
+                ):
+        super(CNN2VAE, self).__init__()
+        
+        # Check if the network is too deep
+        # if the h/w is halved each time, what is the maximum number of layers that I could have and still 
+        # have at least a length of 2 on the shortest side
+        log2_min_hw = int(torch.log2(torch.as_tensor(min(obs_shape[2:]))))
+        if (len(hidden_dims) > log2_min_hw):
+            print('Number of layers is larger than expected:')
+            print(f'{len(hidden_dims)} = # layers')
+            print(f'{log2_min_hw} = # max layers (`log2_min_hw`:)')
+
+        
+        
+        ## Encoder =================================================================================
+        hidden_dims = [in_channels]+hidden_dims
+        modules = []
+        for i in range(len(hidden_dims) - 1):
+#             print(hidden_dims[i], hidden_dims[i+1])
+            modules.append(
+                nn.Sequential(
+                    nn.Conv2d(hidden_dims[i], out_channels=hidden_dims[i+1],
+                              kernel_size= (3,  3), stride= (2, 2), padding  = (1, 1)),
+                    nn.BatchNorm2d(hidden_dims[i+1]),
+                    nn.LeakyReLU()
+                )
+            )
+        self.encoder = nn.Sequential(*modules)
+
+        ### Now set up functions to get mu/var .....................................................
+        # this code uses a work around to find an acceptable input dim for the linear layer that  
+        # connects the encoder's flatten and produces the latents with the fc_mu/fc_var methods. 
+        # In the example code this value is `hidden_dims[-1]*4`. That may be specific to the 2D case
+        # or may be specific to their chosen structure.
+        # it works by 
+        # 1. make a tensor of the same shape of one obs and
+        # 2. pass it through the encoder
+        # 3. for a 2d conv, retain the last 2 dims
+        # 4. take the product to get the input size for fc_mu/fc_var
+        collapse_dims = self.encoder(torch.zeros(obs_shape)).shape[-3:]
+#         collapse_dims = self.encoder(torch.zeros(obs_shape)).shape[-2:]
+        self.collapse_dims = collapse_dims
+#         print(collapse_dims)
+        adjacent_dims = int(torch.prod(torch.tensor(collapse_dims)))
+#         print(adjacent_dims)
+
+        self.fc_mu = nn.Linear(adjacent_dims, latent_dims)
+        self.fc_var = nn.Linear(adjacent_dims, latent_dims)
+
+        ## Decoder =================================================================================
+        self.decoder_input = nn.Linear(latent_dims, adjacent_dims)
+        hidden_dims.reverse()
+        # add in the output channels
+#         hidden_dims += [in_channels]
+#         print(hidden_dims)
+        modules = []
+        ### Now create decoder network .............................................................
+    
+        for i in range(len(hidden_dims) - 1): 
+            if i  !=  (len(hidden_dims) - 2): 
+                modules.append(
+                    nn.Sequential(
+                        nn.ConvTranspose2d(hidden_dims[i],
+                                           hidden_dims[i + 1],
+                                           kernel_size=(3, 3), 
+                                           stride = (2, 2),
+                                           padding=(1, 1),
+                                           output_padding=1
+#                                            output_padding=layer_output_padding[i]
+                        ),
+                        nn.BatchNorm2d(hidden_dims[i + 1]),
+                        nn.LeakyReLU()
+                    )
+                )
+            else: # last layer
+                modules.append(
+                    nn.Sequential(
+                        nn.ConvTranspose2d(hidden_dims[i],
+                                           hidden_dims[i + 1],
+                                           kernel_size=(3, 3), 
+                                           stride = (2, 2),
+                                           padding=(1, 1),
+                                           output_padding=1
+#                                            output_padding=layer_output_padding[i]
+                        ),
+                            nn.Tanh()
+                    )
+                )        
+        self.decoder = nn.Sequential(*modules)
+#         self.decoder_last_layer = nn.Linear(obs_shape[1], obs_shape[1])
+                
+    def encode(self, x):
+        res = self.encoder(x)
+        res = torch.flatten(res, start_dim = 1)
+        mu = self.fc_mu(res)
+        log_var = self.fc_var(res)
+        return [mu, log_var]
+
+    def decode(self, z):
+        z = self.decoder_input(z)
+        z = z.reshape(tuple([-1]+list(self.collapse_dims)))
+        out = self.decoder(z) # this is more complex if it's a cnn. The example uses an adapter layer
+#         out = self.decoder_last_layer(out)
+        return(out)
+
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        return eps * std + mu
+
+    def forward(self, x, **kwargs):
+        mu, log_var = self.encode(x)
+        z = self.reparameterize(mu, log_var)
+        return [self.decode(z), x, mu, log_var]
+
+    def loss_function(self, *args, **kwargs):
+        recons = args[0]
+        x = args[1]
+        mu = args[2]
+        log_var = args[3]
+
+        kld_weight = kwargs['M_N'] # Account for the minibatch samples from the dataset
+
+        recons_loss =F.mse_loss(recons, x)
+        kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
+
+        loss = recons_loss + kld_weight * kld_loss
+        return loss
+    
+        def sample(self, num_samples, current_device, **kwargs):
+            z = torch.randn(num_samples, self.latent_dim)
+            z = z.to(current_device)
+            samples = self.decode(z)
+            return samples        
+        def generate(self, x):
+            return self.forward(x)[0]      
+
+        
+vae = CNN2VAE(
+    in_channels = 17,   
+    hidden_dims = [16
+                  ],
+    latent_dims = 1024,
+    obs_shape = (1, 17, 16, 32)).to(device)
+
+train_vae(
+    vae = vae,
+    data = training_dataloader,
+    epochs=2000,
+    verbose = False
+)
+```
+
+
+
+
+
+## One Hot Encoded
+
+```{python}
+YMat_cs = calc_cs(YMat[train_idx])
+y_cs = apply_cs(YMat, YMat_cs)
+```
+
+```{python}
+training_dataloader = DataLoader(
+    ACGTDataset(y = torch.from_numpy(y_cs[train_idx])[:, None].to(torch.float), 
+                G = torch.from_numpy(ACGT_hilb).to(torch.float), 
+                idx_original = torch.from_numpy(np.array(train_idx)),
+                idx_lookup   = torch.from_numpy(np.asarray(obs_geno_lookup)),
+                use_gpu_num = 0,
+                device = 'cuda'
+               ),
+    batch_size = 50,
+    shuffle = True
+)
+```
+
+```{python}
+validation_dataloader = DataLoader(
+    ACGTDataset(y = torch.from_numpy(y_cs[test_idx])[:, None].to(torch.float), 
+                G = torch.from_numpy(ACGT_hilb).to(torch.float), 
+                idx_original = torch.from_numpy(np.array(test_idx)),
+                idx_lookup   = torch.from_numpy(np.asarray(obs_geno_lookup)),
+                use_gpu_num = 0,
+                device = 'cuda'
+               ),
+    batch_size = 50,
+    shuffle = True
+)
+```
+
+```{python}
+next(iter(training_dataloader))[0].shape
+```
+
+
+```{python}
+class NeuralNetwork(nn.Module):
+    def __init__(self):
+        super(NeuralNetwork, self).__init__()    
+
+#         def Linear_block(in_size, out_size, drop_pr):
+#             block = nn.Sequential(
+#                 nn.Linear(in_size, out_size),
+#                 nn.ReLU(),
+#                 nn.Dropout(drop_pr)
+#             )
+#             return(block)         
+        
+        
+#         def Conv1D_Max_block(in_channels, out_channels, kernel_size, stride):
+#             block = nn.Sequential(
+#                 nn.Conv1d(
+#                     in_channels= in_channels, # second channel
+#                     out_channels= out_channels,
+#                     kernel_size= kernel_size,
+#                     stride= stride
+#                 ), 
+#                 nn.MaxPool1d((kernel_size,), stride=stride)
+#             )
+#             return(block)
+        
+        self.x_network = nn.Sequential(
+            nn.Conv2d(
+                    in_channels= 4, 
+                    out_channels= 4,
+                    kernel_size= (3, 3),
+                    stride= 2,
+                    padding = 1,
+                    bias = True
+                ),
+            nn.Conv2d(
+                    in_channels= 4, 
+                    out_channels= 4,
+                    kernel_size= (3, 3),
+                    stride= 2,
+                    padding = 1,
+                    bias = True
+                ),
+            nn.Conv2d(
+                    in_channels= 4, 
+                    out_channels= 4,
+                    kernel_size= (3, 3),
+                    stride= 2,
+                    padding = 1,
+                    bias = True
+                ),
+            nn.Conv2d(
+                    in_channels= 4, 
+                    out_channels= 4,
+                    kernel_size= (3, 3),
+                    stride= 2,
+                    padding = 1,
+                    bias = True
+                ),
+            nn.Conv2d(
+                    in_channels= 4, 
+                    out_channels= 4,
+                    kernel_size= (3, 3),
+                    stride= 2,
+                    padding = 1,
+                    bias = True
+                )
+        )
+        
+        self.x_pred = nn.Sequential(
+            nn.Flatten(),            
+            nn.Linear(512, 1)
+        )
+        
+    def forward(self, x):
+        out = self.x_network(x)
+        pred = self.x_pred(out)
+        return pred, out
+
+model = NeuralNetwork().to(device)
+
+# model(next(iter(training_dataloader))[0])[0].shape
+
+# torch.Size([50, 4, 256, 512])
+```
+
+```{python}
+LSUV_(model, next(iter(training_dataloader))[0])
+```
+
+```{python}
+# Module for training subnetworks.
+class plDNN_ACGT(pl.LightningModule):
+    def __init__(self, mod):
+        super().__init__()
+        self.mod = mod
+        
+    def training_step(self, batch, batch_idx):
+        g_i, y_i = batch
+        pred, out = self.mod(g_i)
+        loss = F.mse_loss(pred, y_i)
+        self.log("train_loss", loss)
+        
+        with torch.no_grad():
+            weight_list=[(name, param) for name, param in model.named_parameters() if name.split('.')[-1] == 'weight']
+            for l in weight_list:
+                self.log(("train_mean"+l[0]), l[1].mean())
+                self.log(("train_std"+l[0]), l[1].std())        
+        return(loss)
+        
+    def validation_step(self, batch, batch_idx):
+        g_i, y_i = batch
+        pred, out = self.mod(g_i)
+        loss = F.mse_loss(pred, y_i)
+        self.log('val_loss', loss)        
+     
+    def configure_optimizers(self, **kwargs):
+        optimizer = torch.optim.Adam(self.parameters(), **kwargs)
+        return optimizer    
+```
+
+```{python}
+max_epoch = 200
+DNNG = plDNN_ACGT(model)     
+optimizer = DNNG.configure_optimizers()
+
+logger = TensorBoardLogger("tb_logs", name="g-acgt-hilb")
+trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
+
+trainer.fit(model=DNNG, train_dataloaders=training_dataloader, val_dataloaders=validation_dataloader)
+```
+
+```{python}
+torch.save(DNNG.mod, cache_path+'g-acgt-hilb'+'.pt')
+```
+
