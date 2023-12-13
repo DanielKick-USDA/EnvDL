@@ -853,7 +853,7 @@ class ACGTDataset(Dataset): # for any G containing matix with many (phno) to one
             y_idx = self.transform(y_idx)
         return g_idx, y_idx
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 50
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 51
 class BigDataset(Dataset):
     def __init__(
         self,
@@ -872,6 +872,7 @@ class BigDataset(Dataset):
 #         P,
 #         W,
 #         W_type,
+#         send_batch_to_gpu # 'cuda:0' but '0' and 'cuda0' would also work
         transform = None, 
         target_transform = None,
         **kwargs 
@@ -910,6 +911,23 @@ class BigDataset(Dataset):
         if 'W_type' in kwargs: self.W_type = kwargs['W_type']; # raw, hilbert
         # Data to be returned
         self.out_names = [e for e in ['y', 'G', 'S', 'W'] if e in kwargs]
+
+        # Is data starting on the desired device or does it need to be cycled on and off?
+        # This is based on ACGTDataset
+        self.send_batch_to_gpu = None
+        if 'send_batch_to_gpu' in kwargs.keys():
+            send_batch_to_gpu = kwargs['send_batch_to_gpu']
+            if type(send_batch_to_gpu) == str: 
+                send_batch_to_gpu = send_batch_to_gpu.lower()
+                if len(send_batch_to_gpu) >= 1:
+                    # remove characters in 'cuda:'
+                    send_batch_to_gpu = ''.join([e for e in send_batch_to_gpu if e not in ['c', 'u', 'd', 'a', ':']])
+                self.send_batch_to_gpu = int(send_batch_to_gpu)
+            elif type(send_batch_to_gpu) == int: 
+                self.send_batch_to_gpu = send_batch_to_gpu
+            else:
+                print('send_batch_to_gpu kwarg ignored. Must be a string or int. Ideally of form "cuda:0"')
+
         # Transformations
         self.transform = transform
         self.target_transform = target_transform
@@ -978,10 +996,15 @@ class BigDataset(Dataset):
         if 'G' in self.out_names: out += [self.get_G(obs_idx)]
         if 'S' in self.out_names: out += [self.get_S(obs_idx)]
         if 'W' in self.out_names: out += [self.get_W(obs_idx)]
+
+        # send all to gpu    
+        if self.send_batch_to_gpu is not None:
+            out = [[ee.to(self.send_batch_to_gpu) for ee in e] if type(e)==list else e.to(self.send_batch_to_gpu) for e in out]     
+
         return out
 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 52
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 58
 # Standard data prep
 
 # Wrapper function to hide the steps of loading data
@@ -1204,20 +1227,36 @@ E.g. filter = \'val:train\',  filter_lookup = \'obs_env_lookup\'
                 elif which_dict == 'test': res_idx = self.test_dict[key]
                 else: print('only `val` and `test` sets are allowed.')
 
-                res = res[res_idx]
+                if type(res) == list: 
+                    res = [e[res_idx] for e in res]
+                else:
+                    res = res[res_idx]
 
             if ops == 'cs':
                 res = self.apply_cs(name)
             
             if ops == 'asarray':
-                res = np.asarray(res)
+                if type(res) == list: 
+                    res = [np.asarray(e) for e in res]
+                else:
+                    res = np.asarray(res)
             if ops == 'from_numpy':
-                res = torch.from_numpy(res)
+                if type(res) == list: 
+                    res = [torch.from_numpy(e) for e in res]
+                else:
+                    res = torch.from_numpy(res)
             if ops == 'float':
-                res = res.to(torch.float)
+                if type(res) == list: 
+                    res = [e.to(torch.float) for e in res]
+                else:
+                    res = res.to(torch.float)
             if ops[0:4] == 'cuda':
                 # send to device by number. e.g. cuda:0 -> X.to(0)
-                res = res.to(int(ops.split(':')[-1]))
+                if type(res) == list: 
+                    dev_int = int(ops.split(':')[-1])
+                    res = [e.to(dev_int) for e in res]
+                else:
+                    res = res.to(int(ops.split(':')[-1]))
 
         return res
 
@@ -1243,7 +1282,7 @@ E.g. filter = \'val:train\',  filter_lookup = \'obs_env_lookup\'
 # X.get('WMat', ops_string='cs asarray')[0:3, 0:3, 0]
 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 54
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 60
 class plDNN_general(pl.LightningModule):
     def __init__(self, mod, log_weight_stats = False):
         super().__init__()
@@ -1276,7 +1315,7 @@ class plDNN_general(pl.LightningModule):
         return optimizer    
 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 69
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 75
 def train_loop_yx(dataloader, model, loss_fn, optimizer, silent = False):
     size = len(dataloader.dataset)
     for batch, (y_i, xs_i) in enumerate(dataloader):
@@ -1301,7 +1340,7 @@ def train_loop_yx(dataloader, model, loss_fn, optimizer, silent = False):
             if not silent:
                 print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 70
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 76
 def train_error_yx(dataloader, model, loss_fn, silent = False):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
@@ -1322,7 +1361,7 @@ def train_error_yx(dataloader, model, loss_fn, silent = False):
     train_loss /= num_batches
     return(train_loss)
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 71
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 77
 def test_loop_yx(dataloader, model, loss_fn, silent = False):   
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
@@ -1345,7 +1384,7 @@ def test_loop_yx(dataloader, model, loss_fn, silent = False):
         print(f"Test Error: Avg loss: {test_loss:>8f}")
     return(test_loss)
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 72
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 78
 def train_nn_yx(
     cache_path,
     training_dataloader,
@@ -1393,7 +1432,7 @@ def train_nn_yx(
         
     return([model, loss_df])
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 73
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 79
 def yhat_loop_yx(dataloader, model):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
