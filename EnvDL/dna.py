@@ -2,7 +2,7 @@
 
 # %% auto 0
 __all__ = ['taxa_to_filename', 'exists_geno', 'find_geno', 'get_geno', 'list_to_ACGT', 'calc_needed_hilbert_p',
-           'np_2d_to_hilbert', 'np_3d_to_hilbert']
+           'np_2d_to_hilbert', 'np_3d_to_hilbert', 'torch_2d_to_hilbert', 'torch_3d_to_hilbert']
 
 # %% ../nbs/00.01_core_dna.ipynb 10
 def taxa_to_filename(taxa = '05-397/250007467', delim = '/'): return(taxa.replace(delim, '__'))
@@ -223,5 +223,123 @@ def np_3d_to_hilbert(
             temp_mat[:,                          # sample
                      points[i][0], points[i][1], # x, y
                      :] = temp[:, i]             # channels
+
+    return(temp_mat)
+
+# %% ../nbs/00.01_core_dna.ipynb 34
+def torch_2d_to_hilbert(
+    in_seq, # This should be a 2d numpy array or torch tensor with dimensions of [sequence, channels] 
+    **kwargs # for verbose
+):
+    import numpy
+    import torch
+    import tqdm
+    from tqdm import tqdm
+    
+    import hilbertcurve
+    from hilbertcurve.hilbertcurve import HilbertCurve
+    
+    import EnvDL
+    from EnvDL.dna import calc_needed_hilbert_p
+
+    if isinstance(in_seq, numpy.ndarray):
+        in_seq = torch.from_numpy(in_seq)
+    
+    n_snps = in_seq.shape[0]
+    n_channels = in_seq.shape[-1]
+    temp = in_seq
+
+    p_needed = calc_needed_hilbert_p(n_needed=n_snps)
+    
+    # Data represented need not be continuous -- it need only have int positions
+    # a sequence or a sequence with gaps can be encoded
+    hilbert_curve = HilbertCurve(
+        p = p_needed, # iterations i.e. hold 4^p positions
+        n = 2    # dimensions
+        )
+
+    points = hilbert_curve.points_from_distances(range(n_snps))
+
+    dim_0 = torch.Tensor(points)[:, 0].max()+1 # add 1 to account for 0 indexing
+    dim_1 = torch.Tensor(points)[:, 1].max()+1
+    temp_mat = torch.zeros((dim_0.int().item(), # convert to int, get item
+                            dim_1.int().item(), 
+                            n_channels))
+    temp_mat[temp_mat == 0] = torch.nan         #  empty values being used for visualization
+
+    verbose = False
+    if 'verbose' in kwargs:
+        if kwargs['verbose'] == True:
+            verbose = True
+
+    if verbose:
+        for i in tqdm(range(n_snps)):
+            temp_mat[points[i][0], points[i][1], :] = temp[i] 
+    else:        
+        for i in range(n_snps):
+            temp_mat[points[i][0], points[i][1], :] = temp[i]
+    return(temp_mat)
+
+# %% ../nbs/00.01_core_dna.ipynb 35
+def torch_3d_to_hilbert(
+    in_seq, # This should be a 3d numpy array with dimensions of [samples, sequence, channels] 
+    **kwargs
+):
+    "This is the 3d version of `torch_2d_to_hilbert`. The goal is to process all of the samples of an array in one go."
+    # import numpy as np
+    import numpy
+    import torch
+    import tqdm
+    from tqdm import tqdm
+    
+    import hilbertcurve
+    from hilbertcurve.hilbertcurve import HilbertCurve
+
+    import EnvDL
+    from EnvDL.dna import calc_needed_hilbert_p
+    
+    n_snps = in_seq.shape[1]
+    n_channels = in_seq.shape[-1]
+    temp = in_seq
+
+    p_needed = calc_needed_hilbert_p(n_needed=n_snps)
+    
+    # Data represented need not be continuous -- it need only have int positions
+    # a sequence or a sequence with gaps can be encoded
+    hilbert_curve = HilbertCurve(
+        p = p_needed, # iterations i.e. hold 4^p positions
+        n = 2    # dimensions
+        )
+
+    points = hilbert_curve.points_from_distances(range(n_snps))
+
+    # dim_0 = np.max(np.array(points)[:, 0])+1 # add 1 to account for 0 indexing
+    # dim_1 = np.max(np.array(points)[:, 1])+1
+    # temp_mat = np.zeros(shape = [in_seq.shape[0], dim_0, dim_1, n_channels])
+    # temp_mat[temp_mat == 0] = np.nan         #  empty values being used for visualization
+    
+    dim_0 = torch.Tensor(points)[:, 0].max()+1 # add 1 to account for 0 indexing
+    dim_1 = torch.Tensor(points)[:, 1].max()+1
+    temp_mat = torch.zeros((in_seq.shape[0], 
+                            dim_0.int().item(), # convert to int, get item
+                            dim_1.int().item(), 
+                            n_channels))
+    temp_mat[temp_mat == 0] = torch.nan         #  empty values being used for visualization
+
+    verbose = False
+    if 'verbose' in kwargs:
+        if kwargs['verbose'] == True:
+            verbose = True
+
+    if verbose:
+        for i in tqdm(range(n_snps)):
+            temp_mat[:,                 # sample
+            points[i][0], points[i][1], # x, y
+            :] = temp[:, i]             # channels
+    else:        
+        for i in range(n_snps):
+            temp_mat[:,                 # sample
+            points[i][0], points[i][1], # x, y
+            :] = temp[:, i]             # channels
 
     return(temp_mat)

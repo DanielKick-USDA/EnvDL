@@ -2,33 +2,46 @@
 
 # %% auto 0
 __all__ = ['calc_cs', 'apply_cs', 'reverse_cs', 'read_split_info', 'find_idxs_split_dict', 'LSUV_', 'Linear_block',
-           'Conv1D_x2_Max_block', 'train_loop', 'train_error', 'test_loop', 'yhat_loop', 'train_nn',
-           'estimate_iterations', 'ACGTDataset', 'train_loop_yx', 'train_error_yx', 'test_loop_yx', 'train_nn_yx',
-           'yhat_loop_yx']
+           'Conv1D_x2_Max_block', 'conv3x3', 'conv1x1', 'BasicBlock2d', 'BottleneckBlock2d', 'ResNet2d', 'conv0x3',
+           'conv0x1', 'BasicBlock1d', 'BottleneckBlock1d', 'ResNet1d', 'train_loop', 'train_error', 'test_loop',
+           'yhat_loop', 'train_nn', 'estimate_iterations', 'ACGTDataset', 'BigDataset', 'g2fc_datawrapper',
+           'train_loop_yx', 'train_error_yx', 'test_loop_yx', 'train_nn_yx', 'yhat_loop_yx']
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 3
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 2
+import os, re
+import math
+
+from tqdm import tqdm
+
+import numpy as np
+
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
+
+from .core import read_json
+from .dna import np_3d_to_hilbert
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 5
 def calc_cs(x # numeric array
            ): 
     "Calculate nan mean and nan std of an array. Returned as list"
-    import numpy as np
     return [np.nanmean(x, axis = 0), np.nanstd(x, axis = 0)]
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 4
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 6
 def apply_cs(xs, 
              cs_dict_entry # list of length 2 containing mean and s
             ): return ((xs - cs_dict_entry[0]) / cs_dict_entry[1])
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 5
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 7
 def reverse_cs(xs, cs_dict_entry): return (cs_dict_entry[1] * xs) + cs_dict_entry[0]
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 7
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 9
 def read_split_info(
     load_from = '../nbs_artifacts/01.06_g2fc_cluster_genotypes/',
     json_prefix = '2023:9:5:12:8:26'):
     ""
-    import os, re
-    from EnvDL.core import read_json
-    
     jsons = [e for e in os.listdir(load_from) if re.match('^'+json_prefix+'.+\.json$', e)]
     vals = [e for e in jsons if re.match('.+val\d+\.json$', e)]
     vals.sort()
@@ -40,12 +53,11 @@ def read_split_info(
     return(out)
 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 8
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 10
 def find_idxs_split_dict(
     obs_df, # assumes presence of Year, Female, Male
     split_dict # from read_split_info() output. Should be a test of validate dict.
 ):
-    import pandas as pd
     temp = obs_df
     test_mask = ((temp.Year.isin(split_dict['test_years'])) & 
                  ((temp.Female.isin(split_dict['test_parents'])) |
@@ -77,7 +89,7 @@ def find_idxs_split_dict(
         'test_idx': temp.loc[test_mask, ].index, 
         'train_idx': temp.loc[train_mask, ].index} )
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 10
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 12
 def LSUV_(model, data, apply_only_to=['Conv', 'Linear', 'Bilinear'],
           std_tol=0.1, max_iters=10, do_ortho_init=True, logging_FN=print):
     r"""
@@ -135,9 +147,8 @@ def LSUV_(model, data, apply_only_to=['Conv', 'Linear', 'Bilinear'],
 
     if not was_training: model.eval()
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 12
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 14
 def Linear_block(in_size, out_size, drop_pr):
-    import torch.nn as nn
     block = nn.Sequential(
         nn.Linear(in_size, out_size),
         nn.ReLU(),
@@ -145,9 +156,8 @@ def Linear_block(in_size, out_size, drop_pr):
     )
     return(block) 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 14
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 16
 def Conv1D_x2_Max_block(in_channels, out_channels, kernel_size, stride, maxpool_size):
-    import torch.nn as nn
     block = nn.Sequential(
         nn.Conv1d(
             in_channels= in_channels, # second channel
@@ -166,14 +176,522 @@ def Conv1D_x2_Max_block(in_channels, out_channels, kernel_size, stride, maxpool_
     )
     return(block)
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 16
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 21
+def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, dilation: int = 1):
+    # Using https://pytorch.org/vision/main/_modules/torchvision/models/resnet.html as a starting point
+    """3x3 convolution with padding"""
+
+    return nn.Conv2d(
+        in_planes,
+        out_planes,
+        kernel_size=3,
+        stride=stride,
+        padding=dilation,
+        groups=groups,
+        bias=False,
+        dilation=dilation,
+    )
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 22
+def conv1x1(in_planes: int, out_planes: int, stride: int = 1):
+
+    """1x1 convolution"""
+    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 23
+class BasicBlock2d(nn.Module):
+    expansion = 1
+    def __init__(self,
+        inplanes: int,
+        planes: int,
+        stride: int = 1,
+        downsample: nn.Module = None,
+        groups: int = 1,
+        base_width: int = 64,
+        dilation: int = 1,
+        norm_layer: nn.Module = None,
+        expansion: int = 1
+    ) -> None:
+        super().__init__()
+        # Set up defaults if none was passed in
+        if norm_layer is None:
+            norm_layer = nn.BatchNorm2d
+        if groups != 1 or base_width !=  64: raise ValueError('Only groups = 1 and base_width = 64 supported')
+        if dilation > 1: raise NotImplementedError('Dilation not supported')
+
+        # self.expansion = expansion # in ResNet v1, this is 1, in ResNet v1.5 it is set to 4
+
+        # self.conv1 = conv3x3(inplanes, planes*self.expansion, stride)
+        self.conv1 = conv3x3(inplanes, planes, stride)
+        self.bn1 = norm_layer(planes)
+        self.relu = nn.ReLU(inplace=True)
+        # self.conv2 = conv3x3(planes, planes*self.expansion)
+        self.conv2 = conv3x3(planes, planes)
+        self.bn2 = norm_layer(planes)
+        self.downsample = downsample
+        self.stride = stride
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = x
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        if self.downsample is not None:
+            identity = self.downsample(x)
+
+        out += identity
+        out = self.relu(out)
+
+        return out
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 24
+class BottleneckBlock2d(nn.Module):
+    # This is the block used in ResNet v1.5. It is supposed to be more effective.
+    # Main changes are that 
+    # - expansion is not set to 1 
+    # - now there is a third convolution that happens in the slow path
+    #
+    def __init__(
+        self,
+        inplanes: int,
+        planes: int,
+        stride: int = 1,
+        downsample: nn.Module = None,
+        groups: int = 1,
+        base_width: int = 64,
+        dilation: int = 1,
+        norm_layer: nn.Module = None,
+        expansion: int = 4
+    ) -> None:        
+        super().__init__()
+        if norm_layer is None:
+            norm_layer = nn.BatchNorm2d
+            
+        self.expansion = expansion
+
+        width = int(planes * (base_width / 64.0)) * groups
+        # Both self.conv2 and self.downsample layers downsample the input when stride != 1
+        self.conv1 = conv1x1(inplanes, width)
+        self.bn1 = norm_layer(width)
+        self.conv2 = conv3x3(width, width, stride, groups, dilation)
+        self.bn2 = norm_layer(width)
+        self.conv3 = conv1x1(width, planes * self.expansion)
+        self.bn3 = norm_layer(planes * self.expansion)
+        self.relu = nn.ReLU(inplace=True)
+        self.downsample = downsample
+        self.stride = stride
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = x
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+        out = self.relu(out)
+
+        out = self.conv3(out)
+        out = self.bn3(out)
+
+        if self.downsample is not None:
+            identity = self.downsample(x)
+
+        out += identity
+        out = self.relu(out)
+
+        return out
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 25
+class ResNet2d(nn.Module):
+    def __init__(
+        self,
+        block, #: Type[Union[BasicBlock, Bottleneck]],
+        layers, #: List[int],
+        num_outputs: int = 1,
+        zero_init_residual: bool = False,
+        groups: int = 1,
+        width_per_group: int = 64,
+        replace_stride_with_dilation = None, #: Optional[List[bool]] = None,
+        norm_layer = None, #: Optional[Callable[..., nn.Module]] = None,
+        input_channels = 4
+    ) -> None:
+        super().__init__()
+        # _log_api_usage_once(self)
+        if norm_layer is None:
+            norm_layer = nn.BatchNorm2d
+        self._norm_layer = norm_layer
+
+        self.inplanes = 64
+        self.dilation = 1
+        if replace_stride_with_dilation is None:
+            # each element in the tuple indicates if we should replace
+            # the 2x2 stride with a dilated convolution instead
+            replace_stride_with_dilation = [False, False, False]
+        if len(replace_stride_with_dilation) != 3:
+            raise ValueError(
+                "replace_stride_with_dilation should be None "
+                f"or a 3-element tuple, got {replace_stride_with_dilation}"
+            )
+        self.groups = groups
+        self.base_width = width_per_group
+        self.conv1 = nn.Conv2d(input_channels, self.inplanes, kernel_size=7, stride=2, padding=3, bias=False) # Note that this is 4 not 3
+        self.bn1 = norm_layer(self.inplanes)
+        self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.layer1 = self._make_layer(block, 64, layers[0])
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0])
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1])
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2])
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(512 * block.expansion, num_outputs)
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+        # Zero-initialize the last BN in each residual branch,
+        # so that the residual branch starts with zeros, and each residual block behaves like an identity.
+        # This improves the model by 0.2~0.3% according to https://arxiv.org/abs/1706.02677
+        if zero_init_residual:
+            for m in self.modules():
+                if isinstance(m, Bottleneck) and m.bn3.weight is not None:
+                    nn.init.constant_(m.bn3.weight, 0)  # type: ignore[arg-type]
+                elif isinstance(m, BasicBlock) and m.bn2.weight is not None:
+                    nn.init.constant_(m.bn2.weight, 0)  # type: ignore[arg-type]
+
+    def _make_layer(
+        self,
+        block, #: Type[Union[BasicBlock, Bottleneck]],
+        planes: int,
+        blocks: int,
+        stride: int = 1,
+        dilate: bool = False,
+    ) -> nn.Sequential:
+        norm_layer = self._norm_layer
+        downsample = None
+        previous_dilation = self.dilation
+        if dilate:
+            self.dilation *= stride
+            stride = 1
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                conv1x1(self.inplanes, planes * block.expansion, stride),
+                norm_layer(planes * block.expansion),
+            )
+
+        layers = []
+        layers.append(
+            block(
+                self.inplanes, planes, stride, downsample, self.groups, self.base_width, previous_dilation, norm_layer
+            )
+        )
+        self.inplanes = planes * block.expansion
+        for _ in range(1, blocks):
+            layers.append(
+                block(
+                    self.inplanes,
+                    planes,
+                    groups=self.groups,
+                    base_width=self.base_width,
+                    dilation=self.dilation,
+                    norm_layer=norm_layer,
+                )
+            )
+
+        return nn.Sequential(*layers)
+
+    def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
+        # See note [TorchScript super()]
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.fc(x)
+
+        return x
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self._forward_impl(x)
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 29
+def conv0x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, dilation: int = 1):
+    """3x3 convolution with padding"""
+    return nn.Conv1d(
+        in_planes,
+        out_planes,
+        kernel_size=3,
+        stride=stride,
+        padding=dilation,
+        groups=groups,
+        bias=False,
+        dilation=dilation,
+    )
+
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 30
+def conv0x1(in_planes: int, out_planes: int, stride: int = 1):
+    """1x1 convolution"""
+    return nn.Conv1d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 31
+class BasicBlock1d(nn.Module):
+    expansion = 1
+    def __init__(self,
+        inplanes: int,
+        planes: int,
+        stride: int = 1,
+        downsample: nn.Module = None,
+        groups: int = 1,
+        base_width: int = 64,
+        dilation: int = 1,
+        norm_layer: nn.Module = None,
+        expansion: int = 1
+    ) -> None:
+        super().__init__()
+        # Set up defaults if none was passed in
+        if norm_layer is None:
+            norm_layer = nn.BatchNorm1d
+        if groups != 1 or base_width !=  64: raise ValueError('Only groups = 1 and base_width = 64 supported')
+        if dilation > 1: raise NotImplementedError('Dilation not supported')
+
+        # self.expansion = expansion # in ResNet v1, this is 1, in ResNet v1.5 it is set to 4
+
+        # self.conv1 = conv3x3(inplanes, planes*self.expansion, stride)
+        self.conv1 = conv0x3(inplanes, planes, stride)
+        self.bn1 = norm_layer(planes)
+        self.relu = nn.ReLU(inplace=True)
+        # self.conv2 = conv3x3(planes, planes*self.expansion)
+        self.conv2 = conv0x3(planes, planes)
+        self.bn2 = norm_layer(planes)
+        self.downsample = downsample
+        self.stride = stride
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = x
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        if self.downsample is not None:
+            identity = self.downsample(x)
+
+        out += identity
+        out = self.relu(out)
+
+        return out
+  
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 32
+class BottleneckBlock1d(nn.Module):
+    # This is the block used in ResNet v1.5. It is supposed to be more effective.
+    # Main changes are that 
+    # - expansion is not set to 1 
+    # - now there is a third convolution that happens in the slow path
+    #
+    def __init__(
+        self,
+        inplanes: int,
+        planes: int,
+        stride: int = 1,
+        downsample: nn.Module = None,
+        groups: int = 1,
+        base_width: int = 64,
+        dilation: int = 1,
+        norm_layer: nn.Module = None,
+        expansion: int = 4
+    ) -> None:
+        super().__init__()
+        if norm_layer is None:
+            norm_layer = nn.BatchNorm1d
+            
+        self.expansion = expansion
+
+        width = int(planes * (base_width / 64.0)) * groups
+        # Both self.conv2 and self.downsample layers downsample the input when stride != 1
+        self.conv1 = conv0x1(inplanes, width)
+        self.bn1 = norm_layer(width)
+        self.conv2 = conv0x3(width, width, stride, groups, dilation)
+        self.bn2 = norm_layer(width)
+        self.conv3 = conv0x1(width, planes * self.expansion)
+        self.bn3 = norm_layer(planes * self.expansion)
+        self.relu = nn.ReLU(inplace=True)
+        self.downsample = downsample
+        self.stride = stride
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = x
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+        out = self.relu(out)
+
+        out = self.conv3(out)
+        out = self.bn3(out)
+
+        if self.downsample is not None:
+            identity = self.downsample(x)
+
+        out += identity
+        out = self.relu(out)
+
+        return out
+    
+
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 33
+class ResNet1d(nn.Module):
+    def __init__(
+        self,
+        block, #: Type[Union[BasicBlock, Bottleneck]],
+        layers, #: List[int],
+        num_outputs: int = 1,
+        zero_init_residual: bool = False,
+        groups: int = 1,
+        width_per_group: int = 64,
+        replace_stride_with_dilation = None, #: Optional[List[bool]] = None,
+        norm_layer = None, #: Optional[Callable[..., nn.Module]] = None,
+        input_channels = 4
+    ) -> None:
+        super().__init__()
+        # _log_api_usage_once(self)
+        if norm_layer is None:
+            norm_layer = nn.BatchNorm1d
+        self._norm_layer = norm_layer
+
+        self.inplanes = 64
+        self.dilation = 1
+        if replace_stride_with_dilation is None:
+            # each element in the tuple indicates if we should replace
+            # the 2x2 stride with a dilated convolution instead
+            replace_stride_with_dilation = [False, False, False]
+        if len(replace_stride_with_dilation) != 3:
+            raise ValueError(
+                "replace_stride_with_dilation should be None "
+                f"or a 3-element tuple, got {replace_stride_with_dilation}"
+            )
+        self.groups = groups
+        self.base_width = width_per_group
+        self.conv1 = nn.Conv1d(input_channels, self.inplanes, kernel_size=7, stride=2, padding=3, bias=False) # Note that this is 4 not 3
+        self.bn1 = norm_layer(self.inplanes)
+        self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool1d(kernel_size=3, stride=2, padding=1)
+        self.layer1 = self._make_layer(block, 64, layers[0])
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0])
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1])
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2])
+        self.avgpool = nn.AdaptiveAvgPool1d((1))
+        self.fc = nn.Linear(512 * block.expansion, num_outputs)
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv1d):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+            elif isinstance(m, (nn.BatchNorm1d, nn.GroupNorm)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+        # Zero-initialize the last BN in each residual branch,
+        # so that the residual branch starts with zeros, and each residual block behaves like an identity.
+        # This improves the model by 0.2~0.3% according to https://arxiv.org/abs/1706.02677
+        if zero_init_residual:
+            for m in self.modules():
+                if isinstance(m, Bottleneck) and m.bn3.weight is not None:
+                    nn.init.constant_(m.bn3.weight, 0)  # type: ignore[arg-type]
+                elif isinstance(m, BasicBlock) and m.bn2.weight is not None:
+                    nn.init.constant_(m.bn2.weight, 0)  # type: ignore[arg-type]
+
+    def _make_layer(
+        self,
+        block, #: Type[Union[BasicBlock, Bottleneck]],
+        planes: int,
+        blocks: int,
+        stride: int = 1,
+        dilate: bool = False,
+    ) -> nn.Sequential:
+        norm_layer = self._norm_layer
+        downsample = None
+        previous_dilation = self.dilation
+        if dilate:
+            self.dilation *= stride
+            stride = 1
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                conv0x1(self.inplanes, planes * block.expansion, stride),
+                norm_layer(planes * block.expansion),
+            )
+
+        layers = []
+        layers.append(
+            block(
+                self.inplanes, planes, stride, downsample, self.groups, self.base_width, previous_dilation, norm_layer
+            )
+        )
+        self.inplanes = planes * block.expansion
+        for _ in range(1, blocks):
+            layers.append(
+                block(
+                    self.inplanes,
+                    planes,
+                    groups=self.groups,
+                    base_width=self.base_width,
+                    dilation=self.dilation,
+                    norm_layer=norm_layer,
+                )
+            )
+
+        return nn.Sequential(*layers)
+
+    def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
+        # See note [TorchScript super()]
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.fc(x)
+
+        return x
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self._forward_impl(x)
+
+
+
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 39
 def train_loop(dataloader, model, loss_fn, optimizer, silent = False):
-#     import numpy as np
-#     import pandas as pd
-    import torch
-    from torch.utils.data import Dataset
-    from torch.utils.data import DataLoader
-#     from torch import nn
     size = len(dataloader.dataset)
     for batch, (xs_i, y_i) in enumerate(dataloader):
         # Compute prediction and loss
@@ -191,14 +709,8 @@ def train_loop(dataloader, model, loss_fn, optimizer, silent = False):
                 print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 17
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 40
 def train_error(dataloader, model, loss_fn, silent = False):
-#     import numpy as np
-#     import pandas as pd
-    import torch
-    from torch.utils.data import Dataset
-    from torch.utils.data import DataLoader
-#     from torch import nn
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
     train_loss = 0
@@ -211,15 +723,8 @@ def train_error(dataloader, model, loss_fn, silent = False):
     train_loss /= num_batches
     return(train_loss) 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 18
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 41
 def test_loop(dataloader, model, loss_fn, silent = False):
-#     import numpy as np
-#     import pandas as pd
-    import torch
-    from torch.utils.data import Dataset
-    from torch.utils.data import DataLoader
-#     from torch import nn
-
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
     test_loss = 0
@@ -234,16 +739,8 @@ def test_loop(dataloader, model, loss_fn, silent = False):
         print(f"Test Error: Avg loss: {test_loss:>8f}")
     return(test_loss) 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 19
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 42
 def yhat_loop(dataloader, model):
-    import numpy as np
-    import pandas as pd
-    import torch
-#     from torch.utils.data import Dataset
-#     from torch.utils.data import DataLoader
-#     from torch import nn
-
-    
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
     
@@ -260,7 +757,7 @@ def yhat_loop(dataloader, model):
     out = pd.DataFrame(out, columns = ['y_true', 'y_pred'])
     return(out)
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 20
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 43
 def train_nn(
     cache_path,
     training_dataloader,
@@ -271,14 +768,6 @@ def train_nn(
     epochs = 500,
     model_prefix = 'model'
 ):
-    import numpy as np
-    import pandas as pd
-    import torch
-#     from torch.utils.data import Dataset
-#     from torch.utils.data import DataLoader
-    from torch import nn
-    from tqdm import tqdm
-    
     # Initialize the loss function
     loss_fn = nn.MSELoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
@@ -304,10 +793,8 @@ def train_nn(
         
     return([model, loss_df])
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 23
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 46
 def estimate_iterations(sec_per_it = 161):
-    import math
-    import pandas as pd
     hours = [1, 2, 4, 8, 12, 24]
     res = pd.DataFrame(zip(hours, 
     [math.floor(
@@ -315,9 +802,7 @@ def estimate_iterations(sec_per_it = 161):
     ) for i in hours]), columns = ['Hours', 'Iterations'])
     return(res)
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 25
-import torch
-from torch.utils.data import Dataset
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 48
 class ACGTDataset(Dataset): # for any G containing matix with many (phno) to one (geno)
     def __init__(self, 
                  y, 
@@ -365,11 +850,390 @@ class ACGTDataset(Dataset): # for any G containing matix with many (phno) to one
             y_idx = self.transform(y_idx)
         return g_idx, y_idx
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 27
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 50
+class BigDataset(Dataset):
+    def __init__(
+        self,
+        lookup_obs,
+#         lookup_geno,
+#         lookup_env,
+#         y,
+#         G, 
+#         G_type
+#         S,
+#         P,
+#         W,
+#         W_type,
+        transform = None, 
+        target_transform = None,
+        **kwargs 
+        ):
+        """
+        This class produces a set with one or more input tensors. For flexibility the only _required_ input is `lookup_obs`, a tensor with the index of observations. 
+        Everything else is provided as a kwarg. Output is a list of tensors1 ordered [y, G, S, W], any of these not initalized will be missing but not empty (e.g. [y, S, W] not [y, None, S, W]).       
+        Used inputs are:
+        lookup_obs: index for y, used by __getitem__ for obs_idx
+        lookup_geno: index for G, row obs_idx, column 1 is geno_idx (geno information is deduplicated, hence the need for a lookup)
+        lookup_env: index for S & W, , row obs_idx, column 1 is env_idx (env information is deduplicated, hence the need for a lookup)
+        y: yield
+        G: Genomic information 
+        G_type: how the infomation should be returned, 'raw', 'hilbert', or 'list' (i.e. of tensors for snps in each gene)
+        S: Soil information
+        P: Planting/Harvest date contained in column 0, 1 respectively 
+        W: Weather data
+        W_type: how the infomation should be returned, 'raw' or 'hilbert'
+
+        1 G may also be returned as a list of tensors
+        """
+        # Lookup info (so that deduplication works)
+        self.lookup_obs = lookup_obs
+        # if 'lookup_obs'  in kwargs: self.lookup_obs  = kwargs['lookup_obs'];
+        if 'lookup_geno' in kwargs: self.lookup_geno = kwargs['lookup_geno'];
+        if 'lookup_env'  in kwargs: self.lookup_env  = kwargs['lookup_env'];
+        # Data
+        if 'y' in kwargs: self.y = kwargs['y'];
+        if 'G' in kwargs: self.G = kwargs['G'];
+        if 'S' in kwargs: self.S = kwargs['S'];
+        if 'P' in kwargs: self.P = kwargs['P']; # PlantHarvest so that planting can be added into W
+        if 'W' in kwargs: self.W = kwargs['W'];
+        # Data prep state information
+        if 'G_type' in kwargs: self.G_type = kwargs['G_type']; # raw, hilbert, list
+        if 'W_type' in kwargs: self.W_type = kwargs['W_type']; # raw, hilbert
+        # Data to be returned
+        self.out_names = [e for e in ['y', 'G', 'S', 'W'] if e in kwargs]
+        # Transformations
+        self.transform = transform
+        self.target_transform = target_transform
+        
+    def __len__(self):
+        return len(self.lookup_obs)
+    
+
+    # These used to be in __getitem__ but separating them like this allows for them to be overwritten more easily
+    def get_y(self, idx):
+        y_idx = self.y[idx]
+        if self.transform:
+            y_idx = self.transform(y_idx)
+        return(y_idx)
+        
+    def get_G(self, idx):
+        geno_idx = self.lookup_geno[idx, 1]
+        if self.G_type in ['raw', 'hilbert']:
+            G_idx = self.G[geno_idx]
+        if 'list' == self.G_type:
+            G_idx = [e[geno_idx] for e in self.G]
+        if self.transform:
+            G_idx = self.transform(G_idx)
+        return(G_idx)
+
+    def get_S(self, idx):
+        env_idx = self.lookup_env[idx, 1]
+        S_idx = self.S[env_idx]
+        if self.transform:
+            S_idx = self.transform(S_idx)
+        return(S_idx)
+
+    def get_W(self, idx):
+        W_device = torch.Tensor(self.W).get_device()
+
+
+        env_idx = self.lookup_env[idx, 1]
+        # get growing information
+        WPlant = np.zeros(365)
+        # WPlant[self.P[obs_idx, 0]:self.P[obs_idx, 1]] = 1
+        WPlant[self.P[idx, 0]:self.P[idx, 1]] = 1
+        if self.W_type == 'raw':
+            WPlant = torch.from_numpy(WPlant).to(torch.float)
+            # if needed send to gpu
+            if W_device != -1: WPlant = WPlant.to(W_device)            
+            W_idx = torch.concatenate([self.W[env_idx], WPlant[None, :]], axis = 0)
+        if self.W_type == 'hilbert':
+            # convert growing info to hilbert curve
+            WPlant_hilb = np_3d_to_hilbert(WPlant[None, :, None], silent = True)
+            WPlant_hilb = WPlant_hilb.squeeze(axis = 3)
+            WPlant_hilb[np.isnan(WPlant_hilb)] = 0
+            WPlant_hilb = torch.from_numpy(WPlant_hilb).to(torch.float)
+            # if needed send to gpu
+            if W_device != -1: WPlant_hilb = WPlant_hilb.to(W_device)
+            W_idx = torch.concatenate([self.W[env_idx], WPlant_hilb], axis = 0)
+        if self.transform:
+            W_idx = self.transform(W_idx)
+        return(W_idx)
+    
+    def __getitem__(self, idx):
+        out = []
+        # obs_idx = self.lookup_obs[idx]
+        if 'y' in self.out_names: out += [self.get_y(idx)]
+        if 'G' in self.out_names: out += [self.get_G(idx)]
+        if 'S' in self.out_names: out += [self.get_S(idx)]
+        if 'W' in self.out_names: out += [self.get_W(idx)]
+        return out
+
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 52
+# Standard data prep
+
+# Wrapper function to hide the steps of loading data
+import numpy as np
+from .core import get_cached_result
+from .dlfn import read_split_info, find_idxs_split_dict
+import pandas as pd
+import torch
+
+class g2fc_datawrapper():   
+    def __init__(self):
+        self.data_dict = {}
+        self.cs_dict = {}
+        print('Loading and storing default `phno`.')
+        self.load(name='phno', store = True)
+    
+
+    def set_split(self, load_from = '../nbs_artifacts/01.06_g2fc_cluster_genotypes/', json_prefix = '2023:9:5:12:8:26'):
+        if 'phno' not in self.data_dict.keys():
+            print('`phno` must be stored!\nManually initialize with .load()')
+        else:
+            split_info = read_split_info(load_from = load_from, json_prefix = json_prefix)
+
+            temp = self.data_dict['phno'].copy()
+            temp[['Female', 'Male']] = temp['Hybrid'].str.split('/', expand = True)
+
+            self.test_dict = find_idxs_split_dict(
+                obs_df = temp, 
+                split_dict = split_info['test'][0]
+            )
+
+            temp = temp.loc[self.test_dict['train_idx'], ] # restrict before re-aplying
+
+            self.val_dict = find_idxs_split_dict(
+                obs_df = temp, 
+                split_dict = split_info['validate'][0]
+            )
+
+    def generic_load(self, load_from, file_name):        
+        if   file_name.split('.')[-1] == 'pkl': res = get_cached_result(load_from+file_name)
+        elif file_name.split('.')[-1] == 'npy': res = np.load(load_from+file_name)
+        elif file_name.split('.')[-1] == 'csv': res = pd.read_csv(load_from+file_name)
+        else: print(f'Unrecognized file encoding: {file_name.split(".")[-1]} \nReturning None'); res = None
+        return res
+
+    def load(self, name='ACGT', store = False, **kwargs):
+        # defaults for quick access
+        defaults_dict = {
+            ## Genomic Data
+            'ACGT':         ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'ACGT.npy'],
+            'ACGT_hilb':    ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'ACGT_hilb.npy'],            
+            'KEGG_entries': ['../nbs_artifacts/01.05_g2fc_demo_model/', 'filtered_kegg_gene_entries.pkl'],
+            'KEGG_slices':  ['../nbs_artifacts/01.05_g2fc_demo_model/', 'ACGT_gene_slice_list.pkl'],
+
+            ## Soil and Management 
+            'mgmtMatNames': ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'mgmtMatNames.npy'],
+            'mgmtMat':      ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'mgmtMat.npy'],
+            'SMatNames':    ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'SMatNames.npy'],
+            'SMat':         ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'SMat.npy'],
+
+            ## Weather
+            'PlantHarvestNames': ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'PlantHarvestNames.npy'],
+            'PlantHarvest':      ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'PlantHarvest.npy'],
+            'WMat':              ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'WMat.npy'],
+            'WMatNames':         ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'WMatNames.npy'],
+            'WMat_hilb':         ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'WMat_hilb.npy'],
+
+            # Response and lookup
+            'phno':            ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'phno_geno.csv'],
+            'obs_geno_lookup': ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'obs_geno_lookup.npy'], # Phno_Idx  Geno_Idx  Is_Phno_Idx
+            'obs_env_lookup':  ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'obs_env_lookup.npy'],  # Phno_Idx  Env_Idx   Is_Phno_Idx
+            'YMat':            ['../nbs_artifacts/01.03_g2fc_prep_matrices/', 'YMat.npy']
+        }
+
+        if name in defaults_dict.keys():
+            load_from, file_name = defaults_dict[name]
+        else: 
+            print(f'`name` not recognized. Use `load_from` and `file_name` for greater control.\,Allowed `names` are:\n{list(defaults_dict.keys())}')
+        
+        # overwrite defaults if desired
+        if 'load_from' in kwargs.keys(): load_from = kwargs['load_from']
+        if 'file_name' in kwargs.keys(): file_name = kwargs['file_name']
+
+        res = self.generic_load(load_from=load_from, file_name= file_name)
+
+        if store:
+            self.data_dict[name] = res
+        else:
+            return res
+
+    def load_all(self, name_list = [], store = False):
+        if store:
+            for e in name_list:
+                self.load(name = e, store=store)
+        else:
+            res_list = []
+            for e in name_list:
+                res_list += [self.load(name = e, store=store)]
+            return res_list
+
+    def store_cs(self, name, cs_list):
+        self.cs_dict[name] = cs_list
+
+    def calc_cs(self, name, version = 'np', **kwargs):
+
+        res = self.data_dict[name]
+        if 'filter' in kwargs.keys():
+            which_dict, which_split = kwargs['filter'].split(':')
+
+            if which_split == 'train':  key = 'train_idx'
+            elif which_split == 'test': key = 'test_idx'
+            else: print('only `train` and `test` indexes are allowed.')
+
+            if which_dict == 'val':    mask = self.val_dict[key]
+            elif which_dict == 'test': mask = self.test_dict[key]
+            else: print('only `val` and `test` sets are allowed.')
+
+            if 'filter_lookup' in kwargs.keys():
+                # This block exists because some data is deduplicated. In the dataloader I use lookup tables to find the right values.
+                # That gets messy because the enviroment, genome, and yield all get different ones
+                # I could hardcode names to filters but that would make this code pretty inflexible (which I would like to avoid.)
+                # using the manual overwrite metod .store_cs() it's possible to get the desired behavior like this:
+                # X.store_cs('WMat', calc_cs(X.get('WMat')[np.array(list(set(X.get('obs_env_lookup', ops_string='filter:val:train')[:, 1]))),: ,:]))
+                # That is a lot messier looking than I would like. It's hard to see what's happening. 
+                # To get around this I'm adding a 'filter_lookup' kwarg that does the same job as the lookup tables in the data loader.
+                lookup = self.data_dict[kwargs['filter_lookup']]
+                lookup = lookup[mask, 1]
+                # deduplicate; for cs we don't need the order of the obs.
+                mask = np.array(list(set(lookup)))
+            res = res[mask]
+
+        else:
+            print('''
+Scaling based on ALL data. To avoid this pass in a split to be used. 
+If a lookup table should be used to select observations (e.g. obs_env_lookup ) its name should be passed in. 
+E.g. filter = \'val:train\',  filter_lookup = \'obs_env_lookup\'
+                  ''')
+
+        if version == 'np':
+            self.cs_dict[name] = [np.asarray(np.mean(res, axis = 0)), np.asarray(np.std(res, axis = 0))]
+        elif version == 'torch':
+            self.cs_dict[name] = [torch.Tensor.mean(res, axis = 0), torch.Tensor.std(res, axis = 0)]
+
+    def calc_cs_all(self, name_list, version = 'np', **kwargs):
+        for name in name_list:
+            self.calc_cs(name=name, version = version, **kwargs)
+
+    def apply_cs(self, name, **kwargs):
+        if name not in self.cs_dict.keys():
+            self.calc_cs(name, kwargs)
+
+        vals = self.cs_dict[name]
+        res = self.data_dict[name]
+        
+        if type(res) == type(vals[0]):
+            pass
+        elif type(res) == torch.Tensor:
+            # convert to pytorch
+            vals = [torch.from_numpy(e) for e in vals]
+        elif type(res) == np.ndarray:
+            # convert to numpy
+            vals = [torch.Tensor.numpy(e) for e in vals]
+            
+        center, scale = vals
+        res = (res - center) / scale
+        return res
+
+    def get_cs(self, name):
+        if name not in self.cs_dict.keys():
+            res = None
+        else:
+            res = self.cs_dict[name]
+        return res
+
+    def reverse_cs(self, name, x):
+        vals = self.cs_dict[name]
+
+        if type(x) == type(vals[0]):
+            pass
+        elif type(x) == torch.Tensor:
+            # convert to pytorch
+            vals = [torch.from_numpy(e) for e in vals]
+        elif type(res) == np.ndarray:
+            # convert to numpy
+            vals = [torch.Tensor.numpy(e) for e in vals]
+
+        center, scale = vals
+        res = (res * scale) + center
+        return res
+
+    
+    def get(self, name, ops_string = ''):
+        # is split info being requested? (for lookup_obs most likely). Otherwise main data is being requested.
+        if name not in ['val:train', 'test:train', 'val:test', 'test:test']:
+            if name not in self.data_dict.keys():
+                self.load(name, store=True)
+            res = self.data_dict[name]
+        else: 
+            which_dict, which_split = name.split(':')
+
+            if which_split == 'train':  key = 'train_idx'
+            elif which_split == 'test': key = 'test_idx'
+            else: print('only `train` and `test` indexes are allowed.')
+
+            if which_dict == 'val':    res = self.val_dict[key]
+            elif which_dict == 'test': res = self.test_dict[key]
+            else: print('only `val` and `test` sets are allowed.')
+            
+        # apply opperations
+        ops_string = [e for e in ops_string.split(' ') if e != '']
+        for ops in ops_string:
+            if ops[0:6] == 'filter':
+                _, which_dict, which_split = ops.split(':')
+
+                if which_split == 'train':  key = 'train_idx'
+                elif which_split == 'test': key = 'test_idx'
+                else: print('only `train` and `test` indexes are allowed.')
+
+                if which_dict == 'val':    res_idx = self.val_dict[key]
+                elif which_dict == 'test': res_idx = self.test_dict[key]
+                else: print('only `val` and `test` sets are allowed.')
+
+                res = res[res_idx]
+
+            if ops == 'cs':
+                res = self.apply_cs(name)
+            
+            if ops == 'asarray':
+                res = np.asarray(res)
+            if ops == 'from_numpy':
+                res = torch.from_numpy(res)
+            if ops == 'float':
+                res = res.to(torch.float)
+            if ops[0:4] == 'cuda':
+                # send to device by number. e.g. cuda:0 -> X.to(0)
+                res = res.to(int(ops.split(':')[-1]))
+
+        return res
+
+
+# some example usage 
+# X = g2fc_datawrapper()
+# X.set_split()
+# X.load_all(name_list = ['obs_env_lookup', 'YMat', 'PlantHarvest', 'WMat',], store=True) 
+# X.calc_cs('YMat', version = 'np', filter = 'val:train'); X.cs_dict['YMat']
+# X.calc_cs_all(['YMat'], version = 'np', filter = 'val:train'); X.cs_dict['YMat']
+# X.calc_cs('YMat', version = 'np'); X.cs_dict['YMat']
+
+# some demonstration of when to use kwargs for scaling 
+# how do I manually do scaling for enviromental things?
+# X.store_cs('WMat', calc_cs(X.get('WMat')[np.array(list(set(X.get('obs_env_lookup', ops_string='filter:val:train')[:, 1]))),: ,:]))
+# [e[0:3, 0] for e in X.cs_dict['WMat']]
+# X.calc_cs('WMat', filter = 'val:train', filter_lookup= 'obs_env_lookup')
+# [e[0:3, 0] for e in X.cs_dict['WMat']]
+# X.calc_cs('WMat')
+# [e[0:3, 0] for e in X.cs_dict['WMat']]
+
+# X.get('WMat', ops_string='asarray')[0:3, 0:3, 0]
+# X.get('WMat', ops_string='cs asarray')[0:3, 0:3, 0]
+
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 69
 def train_loop_yx(dataloader, model, loss_fn, optimizer, silent = False):
-    import torch
-    from torch.utils.data import Dataset
-    from torch.utils.data import DataLoader
     size = len(dataloader.dataset)
     for batch, (y_i, xs_i) in enumerate(dataloader):
         # Compute prediction and loss
@@ -393,11 +1257,8 @@ def train_loop_yx(dataloader, model, loss_fn, optimizer, silent = False):
             if not silent:
                 print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 28
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 70
 def train_error_yx(dataloader, model, loss_fn, silent = False):
-    import torch
-    from torch.utils.data import Dataset
-    from torch.utils.data import DataLoader
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
     train_loss = 0
@@ -417,12 +1278,8 @@ def train_error_yx(dataloader, model, loss_fn, silent = False):
     train_loss /= num_batches
     return(train_loss)
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 29
-def test_loop_yx(dataloader, model, loss_fn, silent = False):
-    import torch
-    from torch.utils.data import Dataset
-    from torch.utils.data import DataLoader
-    
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 71
+def test_loop_yx(dataloader, model, loss_fn, silent = False):   
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
     test_loss = 0
@@ -444,7 +1301,7 @@ def test_loop_yx(dataloader, model, loss_fn, silent = False):
         print(f"Test Error: Avg loss: {test_loss:>8f}")
     return(test_loss)
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 30
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 72
 def train_nn_yx(
     cache_path,
     training_dataloader,
@@ -455,13 +1312,7 @@ def train_nn_yx(
     model_prefix = 'model',
     save_model = False,
     **kwargs # can include 'silent' for train loop or 'save_on' for saving frequency
-):
-    import numpy as np
-    import pandas as pd
-    import torch
-    from torch import nn
-    from tqdm import tqdm
-    
+):   
     if 'optimizer' not in kwargs:
         optimizer = torch.optim.SGD(model.parameters(), lr=kwargs['learning_rate'])
     else:
@@ -498,12 +1349,8 @@ def train_nn_yx(
         
     return([model, loss_df])
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 31
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 73
 def yhat_loop_yx(dataloader, model):
-    import numpy as np
-    import pandas as pd
-    import torch
-
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
     

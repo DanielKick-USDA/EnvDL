@@ -3,8 +3,10 @@
 /nbs/data
 /nbs/*.csv
 /nbs/tb_logs/*
+/nbs/tb_vae_logs/*
 /nbs/lightning_logs/*
 /nbs/rmme_mnist/*
+/nbs/nohup.out
 
 
 # From the project structure: -------------------------------------------------
