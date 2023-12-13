@@ -455,6 +455,7 @@ format_usa_grid_obs(
 
 ```{python}
 def propose_usa_grid_obs(
+    train_obs_uid,
     idx, # = 0,
     obs_lookup, # = train_obs_uids,
     ith_plantharvest, # = list(propose_plantharvest(first_doy = 60, last_doy = 170, range_pr = 1.1,
@@ -490,6 +491,7 @@ train_obs_uids = pd.DataFrame(
     columns=['Latitude', 'Longitude', 'Year'])
 
 res = propose_usa_grid_obs(
+    train_obs_uid =train_obs_uids,
     idx = 0,
     obs_lookup = train_obs_uids,
     ith_plantharvest = list(propose_plantharvest(first_doy = 60, last_doy = 170, range_pr = 1.1,
@@ -501,6 +503,7 @@ px.imshow(res.squeeze())
 
 ```{python}
 res = propose_usa_grid_obs(
+    train_obs_uid =train_obs_uids,
     idx = 0,
     obs_lookup = train_obs_uids,
     ith_plantharvest = list(propose_plantharvest(first_doy = 60, last_doy = 170, range_pr = 1.1,
@@ -555,10 +558,10 @@ usaMatMetadata, usaMat = _setup_usa_grid_tensor()
 ```
 
 ```{python}
-# subclass to make up a reasonable p (plant harvest) on the fly
+# Sameas above but return X, X
 class SimBigDataset(BigDataset):
 
-    def get_W(self, idx):
+    def __getitem__(self, idx):
         W_idx = self.W[idx, :, :]
 
         # simulate and add in planting/harvest dates
@@ -574,15 +577,12 @@ class SimBigDataset(BigDataset):
         W_idx_device = W_idx.get_device()
         if W_idx_device > -1: WPlant = WPlant.to(W_idx_device)
 
-        # print([e.shape for e in [W_idx, WPlant]])
         W_idx = torch.concatenate([W_idx, WPlant], axis = 0)
 
         if self.W_type == 'raw':
             pass
         elif self.W_type == 'hilbert':
-            # print(W_idx.shape)
             W_idx = W_idx.swapaxes(0, 1)
-            # print(W_idx.shape)
             W_idx = torch_2d_to_hilbert(in_seq=W_idx)
             # fix axes             
             W_idx = W_idx.swapaxes(0,1).swapaxes(0, 2)
@@ -594,7 +594,7 @@ class SimBigDataset(BigDataset):
 
         if self.transform:
             W_idx = self.transform(W_idx)
-        return(W_idx)
+        return [W_idx]
 ```
 
 ```{python}
@@ -670,6 +670,25 @@ exporatory_dataloader_hilb = DataLoader(
     batch_size = 50,
     shuffle = True)
 ```
+
+```{python}
+# Same as above but return X that has been flattened and don't add in planting info
+# and also return two tensors
+# class SimBigDataset2(BigDataset):
+
+#     def __getitem__(self, idx):
+#         W_idx = self.W[idx, ]
+#         return W_idx, W_idx
+
+# exporatory_dataloader2 = DataLoader(
+#     SimBigDataset2(
+#         lookup_obs= torch.linspace(0, tmp.shape[0], tmp.shape[0])[:, None].to('cuda'), 
+#         W = torch.from_numpy(tmp.reshape(-1, 16*365)).to('cuda'), 
+#         W_type = 'raw'),
+#     batch_size = 50,
+#     shuffle = True)
+```
+
 
 # Setup VAE Classes
 
@@ -1345,38 +1364,38 @@ exporatory_dataloader = DataLoader(
 
 ```{python}
 
-# latent_dims = 512
+latent_dims = 512
 
-# vae_en   = ResConv1dEncoder(input_shape = next(iter(exporatory_dataloader))[0].shape )
-# vae_rp   = vaeReparam(vae_en.output_shape_flat[1], latent_dims)
-# vae_samp = vaeSample()
-# vae_ex   = vaeExpand(latent_dims, vae_en.output_shape_flat[1])
-# vae_dc   = ResConv1dDecoder(enc_intermediate_shapes= vae_en.intermediate_shapes.copy())
+vae_en   = ResConv1dEncoder(input_shape = next(iter(exporatory_dataloader))[0].shape )
+vae_rp   = vaeReparam(vae_en.output_shape_flat[1], latent_dims)
+vae_samp = vaeSample()
+vae_ex   = vaeExpand(latent_dims, vae_en.output_shape_flat[1])
+vae_dc   = ResConv1dDecoder(enc_intermediate_shapes= vae_en.intermediate_shapes.copy())
 
-# vae_en = vae_en.to('cuda')
-# vae_rp = vae_rp.to('cuda')
-# vae_samp = vae_samp.to('cuda')
-# vae_ex = vae_ex.to('cuda')
-# vae_dc = vae_dc.to('cuda')
+vae_en = vae_en.to('cuda')
+vae_rp = vae_rp.to('cuda')
+vae_samp = vae_samp.to('cuda')
+vae_ex = vae_ex.to('cuda')
+vae_dc = vae_dc.to('cuda')
 
 
-# max_epoch = 100
+max_epoch = 100
 
-# logger = TensorBoardLogger("tb_vae_logs", name="conv1-e512-b512")
+logger = TensorBoardLogger("tb_vae_logs", name="conv1-e512-b512")
 
-# test_vae = hWthrVAE(
-#     enc= vae_en,
-#     rpm= vae_rp,
-#     smp= vae_samp,
-#     ex = vae_ex,
-#     dcd= vae_dc
-# )#.to('cuda')
+test_vae = hWthrVAE(
+    enc= vae_en,
+    rpm= vae_rp,
+    smp= vae_samp,
+    ex = vae_ex,
+    dcd= vae_dc
+)#.to('cuda')
 
-# optimizer = test_vae.configure_optimizers()
+optimizer = test_vae.configure_optimizers()
 
-# trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
+trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
 
-# trainer.fit(model=test_vae, train_dataloaders=exporatory_dataloader)
+trainer.fit(model=test_vae, train_dataloaders=exporatory_dataloader)
 ```
 
 ```{python}
@@ -1490,57 +1509,430 @@ class ResNetConv1Fixup(nn.Module):
         print(x.shape)
         return x
 
-model = ResNetConv1Fixup(ResBlockConv1Fixup, layers = [3,3,3], outputs=1)
-model(torch.randn([512, 17, 365])).shape
+# model = ResNetConv1Fixup(ResBlockConv1Fixup, layers = [3,3,3], outputs=1)
+# model(torch.randn([512, 17, 365])).shape
 ```
 
 ```{python}
-# goal structure for vae
+class ResNetConv1FixupSuperDeep(nn.Module):
+    def _make_layer_block(self, block, out_channels, num_blocks, stride = 1):
+        downsample = None
+        if stride != 1: 
+            downsample = nn.AvgPool1d(1, stride = stride)
 
-x = torch.randn([512, 17, 384]) # pad by 19 days
+        layer_list = []
+        layer_list.append(block(self.in_channels, out_channels, stride = stride, downsample = downsample))
+        # update to the new number of channels
+        self.in_channels = out_channels
+        for _ in range(1, num_blocks):
+            layer_list.append(block(out_channels, out_channels))
 
-mods = nn.ModuleList([
-    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=4, stride=2, padding=1, bias = False),
-    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=4, stride=2, padding=1, bias = False),
-    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=4, stride=2, padding=1, bias = False),
-    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=4, stride=2, padding=1, bias = False),
-    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=4, stride=2, padding=1, bias = False),
-    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=4, stride=2, padding=1, bias = False),
-    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=4, stride=2, padding=1, bias = False),
+        return nn.Sequential(*layer_list)
 
-    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=3, stride=1, padding=1, bias = False),
+    def __init__(self, block: nn.Module, layers: list, outputs: int = 1):
+        super(ResNetConv1FixupSuperDeep, self).__init__()
+        self.num_layers = sum(layers)
 
-    torch.nn.Upsample(scale_factor=2), #'nearest', 'linear', 'bilinear', 'bicubic' and 'trilinear'. Default: 'nearest'
-    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=3, stride=1, padding=1, bias = False),
+        self.conv   = nn.Conv1d(in_channels= 17, out_channels= 32, kernel_size=3, stride=1, padding=1, bias = False)
+        self.bias1  = nn.Parameter(torch.zeros(1))
+        
+        self.in_channels = 32 # note this is into the layer blocks not in here.
+        self.block1 = self._make_layer_block(block, out_channels=32,   num_blocks=layers[0], stride= 1) 
+        self.block2 = self._make_layer_block(block, out_channels=64,   num_blocks=layers[1], stride= 2) 
+        self.block3 = self._make_layer_block(block, out_channels=128,  num_blocks=layers[2], stride= 2) 
+        
+        self.block4 = self._make_layer_block(block, out_channels=256,  num_blocks=layers[3], stride= 2) 
+        self.block5 = self._make_layer_block(block, out_channels=512,  num_blocks=layers[4], stride= 2) 
+        self.block6 = self._make_layer_block(block, out_channels=1024, num_blocks=layers[5], stride= 2) 
 
-    torch.nn.Upsample(scale_factor=2), 
-    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=3, stride=1, padding=1, bias = False),
+        self.block7 = self._make_layer_block(block, out_channels=2048, num_blocks=layers[6], stride= 2) 
 
-    torch.nn.Upsample(scale_factor=2), 
-    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=3, stride=1, padding=1, bias = False),
+        self.avgpool= nn.AdaptiveAvgPool1d((1))
+        self.bias2  = nn.Parameter(torch.zeros(1))
+        self.fc     = nn.Linear(2048, outputs)
 
-    torch.nn.Upsample(scale_factor=2), 
-    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=3, stride=1, padding=1, bias = False),
+        for mod in self.modules():
+            if isinstance(mod, ResBlockConv1Fixup):        
+                # original version 
+                # conv_scaling = np.sqrt(2 / (mod.l1_conv.weight.shape[0] * np.prod(mod.l1_conv.weight.shape[2:]))) * self.num_layers ** (-0.5)
+                # remade in pytorch
+                conv_scaling = torch.sqrt(2 / (torch.tensor(mod.l1_conv.weight.shape[0]) * torch.prod(torch.tensor(mod.l1_conv.weight.shape[2:])))) * self.num_layers ** (-0.5)
+                nn.init.normal_(mod.l1_conv.weight, mean = 0, std= conv_scaling)
+                nn.init.constant_(mod.l2_conv.weight, 0)
+            elif isinstance(mod, nn.Linear):
+                nn.init.constant_(mod.weight, 0)
+                nn.init.constant_(mod.bias, 0)
 
-    torch.nn.Upsample(scale_factor=2), 
-    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=3, stride=1, padding=1, bias = False),
 
-    torch.nn.Upsample(scale_factor=2), 
-    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=3, stride=1, padding=1, bias = False),
+    def forward(self, x):
+        # automatically pad the start and end of the input so that the length is nicely divisible.
+        # print(torch.Tensor(x).get_device())
+        x_dev = torch.Tensor(x).get_device()
+        if x_dev < 0:
+            x = torch.concat([
+                torch.zeros(tuple(list(x.shape)[0:-1]+[10])),
+                x,
+                torch.zeros(tuple(list(x.shape)[0:-1]+[ 9]))], axis = 2)
+        else:
+            x = torch.concat([
+                torch.zeros(tuple(list(x.shape)[0:-1]+[10])).to(x_dev),
+                x,
+                torch.zeros(tuple(list(x.shape)[0:-1]+[ 9])).to(x_dev)], axis = 2)
 
-    torch.nn.Upsample(scale_factor=2), 
-    nn.Conv1d(in_channels= 17, out_channels= 17, kernel_size=3, stride=1, padding=1, bias = False),
-])
+        x = F.relu(self.conv(x) + self.bias1)
 
-for mod in mods:
-    l = x.shape[-1]
-    x = mod(x)
-    if isinstance(mod, nn.Upsample): pass
-    else: print(f'{x.shape[-1]/l} \t {x.shape[-1]}')
+        x = self.block1(x)
+        x = self.block2(x)
+        x = self.block3(x)
 
-x = x[:, :, 9:-10]
-print(f'{x.shape[-1]/l} \t {x.shape[-1]}')
+        x = self.block4(x)
+        x = self.block5(x)
+        x = self.block6(x)
+        
+        x = self.block7(x)
+        
+        x = self.avgpool(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc(x + self.bias2)
+        return x
+
+model = ResNetConv1FixupSuperDeep(ResBlockConv1Fixup, layers = [3,3,3,3,3,3,3], outputs=64)
+model(torch.randn([512, 17, 365])).shape # pad by 19 days automatically.
 ```
+
+```{python}
+# # This version uses transpose convolutions to upsample
+
+# class ResNetConv1FixupSuperDeepTConv(nn.Module):
+#     def _make_layer_block(self, block, out_channels, num_blocks, stride = 1):
+#         downsample = None
+#         if stride != 1: 
+#             downsample = nn.AvgPool1d(1, stride = stride)
+
+#         layer_list = []
+#         layer_list.append(block(self.in_channels, out_channels, stride = stride, downsample = downsample))
+#         # update to the new number of channels
+#         self.in_channels = out_channels
+#         for _ in range(1, num_blocks):
+#             layer_list.append(block(out_channels, out_channels))
+
+#         return nn.Sequential(*layer_list)
+
+#     def __init__(self, block: nn.Module, layers: list, inputs: int = 1):
+#         super(ResNetConv1FixupSuperDeepTConv, self).__init__()
+#         self.num_layers = sum(layers)
+
+#         # self.avgpool= nn.AdaptiveAvgPool1d((1))
+#         self.bias2  = nn.Parameter(torch.zeros(1))
+#         self.fc     = nn.Linear(inputs, 2048)
+        
+#         self.in_channels = 6 # note this is into the layer blocks not in here.
+#         self.block1 = self._make_layer_block(block, out_channels=12,  num_blocks=layers[0], stride= 2) 
+#         self.block2 = self._make_layer_block(block, out_channels=24,  num_blocks=layers[1], stride= 2) 
+#         self.block3 = self._make_layer_block(block, out_channels=48,  num_blocks=layers[2], stride= 2) 
+#         self.block4 = self._make_layer_block(block, out_channels=96,  num_blocks=layers[3], stride= 2) 
+#         self.block5 = self._make_layer_block(block, out_channels=192, num_blocks=layers[4], stride= 2) 
+#         self.block6 = self._make_layer_block(block, out_channels=384, num_blocks=layers[5], stride= 2) 
+
+#         self.conv   = nn.Conv1d(in_channels= 32, out_channels= 17, kernel_size=3, stride=1, padding=1, bias = False)
+#         self.bias1  = nn.Parameter(torch.zeros(1))
+
+#         #TODO Should I pass the last conv through a linear layer or just remove the relu?
+
+#         for mod in self.modules():
+#             if isinstance(mod, ResBlockConv1Fixup):        
+#                 # original version 
+#                 # conv_scaling = np.sqrt(2 / (mod.l1_conv.weight.shape[0] * np.prod(mod.l1_conv.weight.shape[2:]))) * self.num_layers ** (-0.5)
+#                 # remade in pytorch
+#                 conv_scaling = torch.sqrt(2 / (torch.tensor(mod.l1_conv.weight.shape[0]) * torch.prod(torch.tensor(mod.l1_conv.weight.shape[2:])))) * self.num_layers ** (-0.5)
+#                 nn.init.normal_(mod.l1_conv.weight, mean = 0, std= conv_scaling)
+#                 nn.init.constant_(mod.l2_conv.weight, 0)
+#             elif isinstance(mod, nn.Linear):
+#                 nn.init.constant_(mod.weight, 0)
+#                 nn.init.constant_(mod.bias, 0)
+
+
+#     def forward(self, x):
+#         def say(msg='\t'): print(f'{msg}\t{list(x.shape)}')
+#         # x = self.avgpool(x)
+#         # say()
+#         # x = x.view(x.size(0), -1)
+#         say()
+#         x = self.fc(x + self.bias2)
+#         say()
+#         x = torch.Tensor.repeat(x[:, :, None], (1, 1, 6))
+#         say()
+
+#         x = einops.rearrange(x, 'b c l -> b l c')
+
+
+#         say('into block1:')
+#         x = self.block1(x)
+#         say('out block1:')
+#         x = self.block2(x)
+#         say('out block2:')
+#         x = self.block3(x)
+#         say('out block3:')
+
+#         x = self.block4(x)
+#         say()
+#         x = self.block5(x)
+#         say()
+#         x = self.block6(x)
+#         say('out block6:')
+    
+#         # x = self.block7(x)       
+#         # say()
+
+#         x = einops.rearrange(x, 'b l c -> b c l')
+#         say('transpose')
+#         # x = F.relu(self.conv(x) + self.bias1)
+#         x = self.conv(x) + self.bias1
+#         say()
+#         #TODO add clip.
+
+#         return x
+
+
+
+# xin = torch.randn([512, 2048, 6])
+# print(xin.shape)
+
+# model = ResNetConv1FixupSuperDeepTConv(ResBlockConv1Fixup, layers = [3,3,3,3,3,3,3], inputs=64)
+# model(torch.randn([512, 64])).shape
+```
+
+```{python}
+# This version uses transpose convolutions to upsample
+class ResBlockConv1FixupUpsample(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias = False, upsample_scale = 1):
+        super(ResBlockConv1FixupUpsample, self).__init__()
+        self.l1_conv  = nn.Conv1d(in_channels= in_channels,
+                                  out_channels= out_channels,
+                                  kernel_size= kernel_size,
+                                  stride= stride,
+                                  padding= padding,
+                                  bias= bias)
+        self.l1_bias1 = nn.Parameter(torch.zeros(1))
+        self.l1_bias2 = nn.Parameter(torch.zeros(1))
+        
+        self.l2_conv  = nn.Conv1d(in_channels= out_channels,
+                                  out_channels= out_channels,
+                                  kernel_size= kernel_size,
+                                  stride= 1,
+                                  padding= padding,
+                                  bias= bias)
+        self.l2_bias1 = nn.Parameter(torch.zeros(1))
+        self.l2_bias2 = nn.Parameter(torch.zeros(1))
+        self.l2_scale = nn.Parameter(torch.ones(1))    
+        # self.downsample = downsample 
+
+        # shrink channel number so that they can be added together (same opperation as l1_conv)
+        self.l0_conv = nn.Conv1d(in_channels= in_channels,
+                                  out_channels= out_channels,
+                                  kernel_size= kernel_size,
+                                  stride= stride,
+                                  padding= padding,
+                                  bias= bias)
+
+        self.upsample = None
+        if upsample_scale > 1:
+            self.upsample = torch.nn.Upsample(scale_factor=upsample_scale)
+
+    def forward(self, x):
+        if self.upsample is not None:
+            x = self.upsample(x)
+            # print(f'up: {x.shape}')
+
+        xin = x
+        # long path
+        out =    self.l1_conv(  x + self.l1_bias1) 
+        # print(xin.shape, out.shape)
+        out =         F.relu( out + self.l1_bias2)
+        # print(xin.shape, out.shape)
+        out =    self.l2_conv(out + self.l2_bias1)
+        # print(xin.shape, out.shape)
+        out = out * self.l2_scale + self.l2_bias2
+        # short path
+        # if self.downsample is not None:
+            # print(xin.shape)
+            # xin = self.downsample(x+self.l1_bias1)
+            # print(xin.shape)
+            # xin = torch.cat((xin, torch.zeros_like(xin)), 1)
+            # print(xin.shape)
+
+        # reduce channels
+        xin = self.l0_conv(xin+self.l1_bias1)
+
+        # print(xin.shape, out.shape)
+        out = F.relu(out + xin)
+        # print(f'out: {out.shape}')
+
+        # if self.upsample is not None:
+        #     out = self.upsample(out)
+        #     print(f'up: {out.shape}')
+        return(out)
+
+
+
+class ResNetConv1FixupSuperDeepUpsample(nn.Module):
+    def _make_layer_block(self, block, out_channels, num_blocks, stride = 1, upsample_scale = 2):
+        # downsample = None
+        # if stride != 1: 
+        #     downsample = nn.AvgPool1d(1, stride = stride)
+
+        layer_list = []
+        layer_list.append(block(self.in_channels, out_channels, stride = stride, upsample_scale = upsample_scale))
+        # update to the new number of channels
+        self.in_channels = out_channels
+        for _ in range(1, num_blocks):
+            layer_list.append(block(out_channels, out_channels, stride = 1, upsample_scale = 1))
+
+        return nn.Sequential(*layer_list)
+
+    def __init__(self, block: nn.Module, layers: list, inputs: int = 1):
+        super(ResNetConv1FixupSuperDeepUpsample, self).__init__()
+        self.num_layers = sum(layers)
+
+        # self.avgpool= nn.AdaptiveAvgPool1d((1))
+        self.bias2  = nn.Parameter(torch.zeros(1))
+        self.fc     = nn.Linear(inputs, 2048)
+        
+        self.in_channels = 2048
+        self.block1 = self._make_layer_block(block, out_channels=1024, num_blocks=layers[0], stride= 1, upsample_scale = 2) 
+        self.block2 = self._make_layer_block(block, out_channels=512,  num_blocks=layers[1], stride= 1, upsample_scale = 2) 
+        self.block3 = self._make_layer_block(block, out_channels=256,  num_blocks=layers[2], stride= 1, upsample_scale = 2) 
+        self.block4 = self._make_layer_block(block, out_channels=128,  num_blocks=layers[3], stride= 1, upsample_scale = 2) 
+        self.block5 = self._make_layer_block(block, out_channels=64,   num_blocks=layers[4], stride= 1, upsample_scale = 2) 
+        self.block6 = self._make_layer_block(block, out_channels=32,   num_blocks=layers[5], stride= 1, upsample_scale = 2) 
+        self.block7 = self._make_layer_block(block, out_channels=32,   num_blocks=layers[6], stride= 1, upsample_scale = 2) 
+
+        self.conv   = nn.Conv1d(in_channels= 32, out_channels= 17, kernel_size=3, stride=1, padding=1, bias = False)
+        self.bias1  = nn.Parameter(torch.zeros(1))
+
+
+        for mod in self.modules():
+            if isinstance(mod, ResBlockConv1Fixup):        
+                # original version 
+                # conv_scaling = np.sqrt(2 / (mod.l1_conv.weight.shape[0] * np.prod(mod.l1_conv.weight.shape[2:]))) * self.num_layers ** (-0.5)
+                # remade in pytorch
+                conv_scaling = torch.sqrt(2 / (torch.tensor(mod.l1_conv.weight.shape[0]) * torch.prod(torch.tensor(mod.l1_conv.weight.shape[2:])))) * self.num_layers ** (-0.5)
+                nn.init.normal_(mod.l1_conv.weight, mean = 0, std= conv_scaling)
+                nn.init.constant_(mod.l2_conv.weight, 0)
+            elif isinstance(mod, nn.Linear):
+                nn.init.constant_(mod.weight, 0)
+                nn.init.constant_(mod.bias, 0)
+
+
+    def forward(self, x):
+        x = self.fc(x + self.bias2)
+        x = torch.Tensor.repeat(x[:, :, None], (1, 1, 3))
+        x = self.block1(x)
+        x = self.block2(x)
+        x = self.block3(x)
+        x = self.block4(x)
+        x = self.block5(x)
+        x = self.block6(x)    
+        x = self.block7(x)       
+        x = self.conv(x) + self.bias1
+
+        # remove first 10 and last 9 because input recieves padding with 0s before embedding (to be a nice mulitple)
+        x = x[:, :, 10:-9]
+        return x
+
+
+model = ResNetConv1FixupSuperDeepUpsample(ResBlockConv1FixupUpsample, 
+                                        #   layers = [3,3,3,3,3,3,3],
+                                          layers = [1 for i in range(7)],
+                                          inputs=64)
+model(torch.randn([512, 64])).shape
+```
+
+```{python}
+# xin = vae_en(torch.randn(512, 17, 365))
+# xin = vae_rp(xin)
+# xin.shape
+```
+
+
+```{python}
+# # How much better is a bigger latent space?
+latent_dims = 64
+
+vae_en   = ResNetConv1FixupSuperDeep(ResBlockConv1Fixup, layers = [1 for i in range(7)], outputs=64)
+vae_rp   = vaeReparam(64, latent_dims)
+vae_samp = vaeSample()
+vae_ex   = vaeExpand(latent_dims, 64)
+vae_dc   = ResNetConv1FixupSuperDeepUpsample(ResBlockConv1FixupUpsample, layers = [1 for i in range(7)], inputs=64)
+
+vae_en = vae_en.to('cuda')
+vae_rp = vae_rp.to('cuda')
+vae_samp = vae_samp.to('cuda')
+vae_ex = vae_ex.to('cuda')
+vae_dc = vae_dc.to('cuda')
+
+
+max_epoch = 20
+
+logger = TensorBoardLogger("tb_vae_logs", name="conv1Fixup-e64")
+
+test_vae = hWthrVAE(
+    enc= vae_en,
+    rpm= vae_rp,
+    smp= vae_samp,
+    ex = vae_ex,
+    dcd= vae_dc
+)#.to('cuda')
+
+optimizer = test_vae.configure_optimizers()
+
+trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
+
+trainer.fit(model=test_vae, train_dataloaders=exporatory_dataloader)
+```
+
+```{python}
+# # How much better is a bigger latent space?
+latent_dims = 64
+
+vae_en   = ResNetConv1FixupSuperDeep(ResBlockConv1Fixup, layers = [3 for i in range(7)], outputs=64)
+vae_rp   = vaeReparam(64, latent_dims)
+vae_samp = vaeSample()
+vae_ex   = vaeExpand(latent_dims, 64)
+vae_dc   = ResNetConv1FixupSuperDeepUpsample(ResBlockConv1FixupUpsample, layers = [3 for i in range(7)], inputs=64)
+
+vae_en = vae_en.to('cuda')
+vae_rp = vae_rp.to('cuda')
+vae_samp = vae_samp.to('cuda')
+vae_ex = vae_ex.to('cuda')
+vae_dc = vae_dc.to('cuda')
+
+
+max_epoch = 20
+
+logger = TensorBoardLogger("tb_vae_logs", name="conv1Fixup-e64-l3")
+
+test_vae = hWthrVAE(
+    enc= vae_en,
+    rpm= vae_rp,
+    smp= vae_samp,
+    ex = vae_ex,
+    dcd= vae_dc
+)#.to('cuda')
+
+optimizer = test_vae.configure_optimizers()
+
+trainer = pl.Trainer(max_epochs=max_epoch, logger=logger)
+
+trainer.fit(model=test_vae, train_dataloaders=exporatory_dataloader)
+```
+
+
+
+
+
+
+
 
 ## Fitting LSTM model
 
