@@ -88,7 +88,10 @@ Example file:
                         self.ipynb_names += data[key]
                     if 'ipynb_names_next' == key:
                         # technically this could be used to add files and set them to first
-                        self.ipynb_names = data[key]+[e for e in self.ipynb_names  if e != data[key]]
+                        if data[key] not in self.ipynb_names:
+                            self.ipynb_names = data[key]+[e for e in self.ipynb_names  if e != data[key]]
+                        else:
+                            self.ipynb_names = [e for e in self.ipynb_names  if e == data[key]]+[e for e in self.ipynb_names  if e != data[key]]                        
                     if 'ipynb_names_del' == key:
                         self.ipynb_names = [e for e in self.ipynb_names if e != data[key]]
                     if 'background_mode' == key:
