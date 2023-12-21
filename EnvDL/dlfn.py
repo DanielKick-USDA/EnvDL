@@ -698,7 +698,7 @@ class ResNet1d(nn.Module):
 
 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 35
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 37
 class VNNHelper():
     def __init__(self, edge_dict, all_values_are_nodes = True) -> None:
         self.edge_dict = edge_dict.copy()
@@ -834,13 +834,8 @@ class VNNHelper():
                 # edge takes a head/tail whereas edges takes name pairs concatednated (A, B -> AB)in a list
                 dot.edge(value, key)    
         return dot
-    
 
-
-
-
-
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 38
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 40
 def reverse_edge_dict(edge_dict):
     # Reverse connection directions. Connections are not one to one so it's not as simple as swapping keys/values
     edge_dict_reversed = {}
@@ -866,7 +861,7 @@ def reverse_edge_dict(edge_dict):
 
     return edge_dict_reversed
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 39
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 41
 def reverse_node_props(prop_dict, 
                        conversion_dict = {'out':'inp',
                                           'inp':'out',
@@ -887,7 +882,7 @@ def reverse_node_props(prop_dict,
 
 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 41
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 43
 def Linear_block_reps(in_size, out_size, drop_pr, block_reps):
     block_list = []
     for i in range(block_reps):
@@ -905,7 +900,7 @@ def Linear_block_reps(in_size, out_size, drop_pr, block_reps):
     block = nn.ModuleList(block_list)
     return(block)     
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 42
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 44
 class VisableNeuralNetwork(nn.Module):
     def __init__(self, 
                  node_props, 
@@ -990,7 +985,7 @@ class VisableNeuralNetwork(nn.Module):
             return {e:temp_res_dict[e] for e in self.output_names}
 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 49
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 68
 # LOD is list of dicts.
 # def kegg_brite_LOD_to_connections(
 def kegg_connections_build(
@@ -1036,7 +1031,7 @@ def kegg_connections_build(
     return(kegg_connections)          
 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 50
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 69
 def kegg_connections_clean(kegg_connections):
     if 'Others' in kegg_connections.keys():
         del kegg_connections['Others']
@@ -1071,7 +1066,7 @@ def kegg_connections_clean(kegg_connections):
         kegg_connections[key] = [e for e in kegg_connections[key] if e not in rm_list]
     return kegg_connections
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 51
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 70
 def kegg_connections_append_y_hat(kegg_connections):
     # add yhat node to the graph
     temp_values = []
@@ -1081,7 +1076,7 @@ def kegg_connections_append_y_hat(kegg_connections):
     kegg_connections['y_hat'] = [key for key in kegg_connections.keys() if key not in temp_values]
     return kegg_connections
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 61
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 80
 class ListDataset(Dataset): # for any G containing matix with many (phno) to one (geno)
     def __init__(self, 
                  y, 
@@ -1117,7 +1112,7 @@ class ListDataset(Dataset): # for any G containing matix with many (phno) to one
             
         return y_idx, x_idx
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 62
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 81
 class plVNN(pl.LightningModule):
     def __init__(self, mod):
         super().__init__()
@@ -1139,7 +1134,7 @@ class plVNN(pl.LightningModule):
         optimizer = torch.optim.Adam(self.parameters(), **kwargs)
         return optimizer    
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 66
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 85
 def kegg_connections_sanitize_names(kegg_connections, replace_chars = {'.':'_'}):
     # have to clean the key values so that none have '.' because I'm looking up nodes by name and pytorch doesn't allow this.
     #NOTE this will potentially (but not here) create a bug if there are genes named with '.'    
@@ -1155,7 +1150,7 @@ def kegg_connections_sanitize_names(kegg_connections, replace_chars = {'.':'_'})
 
     return new_kegg_connections
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 73
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 100
 def train_loop(dataloader, model, loss_fn, optimizer, silent = False):
     size = len(dataloader.dataset)
     for batch, (xs_i, y_i) in enumerate(dataloader):
@@ -1174,7 +1169,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, silent = False):
                 print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 74
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 101
 def train_error(dataloader, model, loss_fn, silent = False):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
@@ -1188,7 +1183,7 @@ def train_error(dataloader, model, loss_fn, silent = False):
     train_loss /= num_batches
     return(train_loss) 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 75
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 102
 def test_loop(dataloader, model, loss_fn, silent = False):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
@@ -1204,7 +1199,7 @@ def test_loop(dataloader, model, loss_fn, silent = False):
         print(f"Test Error: Avg loss: {test_loss:>8f}")
     return(test_loss) 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 76
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 103
 def yhat_loop(dataloader, model):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
@@ -1222,7 +1217,7 @@ def yhat_loop(dataloader, model):
     out = pd.DataFrame(out, columns = ['y_true', 'y_pred'])
     return(out)
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 77
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 104
 def train_nn(
     cache_path,
     training_dataloader,
@@ -1258,7 +1253,7 @@ def train_nn(
         
     return([model, loss_df])
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 80
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 107
 def estimate_iterations(sec_per_it = 161):
     hours = [1, 2, 4, 8, 12, 24]
     res = pd.DataFrame(zip(hours, 
@@ -1267,7 +1262,7 @@ def estimate_iterations(sec_per_it = 161):
     ) for i in hours]), columns = ['Hours', 'Iterations'])
     return(res)
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 82
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 109
 class ACGTDataset(Dataset): # for any G containing matix with many (phno) to one (geno)
     def __init__(self, 
                  y, 
@@ -1315,7 +1310,7 @@ class ACGTDataset(Dataset): # for any G containing matix with many (phno) to one
             y_idx = self.transform(y_idx)
         return g_idx, y_idx
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 85
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 112
 class BigDataset(Dataset):
     def __init__(
         self,
@@ -1493,7 +1488,7 @@ class BigDataset(Dataset):
 #                                      # 21184MiB needed for full dataset.
 # gi = next(iter(training_dataloader)) #   470MiB GPU used after being called
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 87
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 114
 # Standard data prep
 
 # Wrapper function to hide the steps of loading data
@@ -1776,7 +1771,7 @@ E.g. filter = \'val:train\',  filter_lookup = \'obs_env_lookup\'
 # X.get('WMat', ops_string='cs asarray')[0:3, 0:3, 0]
 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 89
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 116
 class plDNN_general(pl.LightningModule):
     def __init__(self, mod, log_weight_stats = False):
         super().__init__()
@@ -1809,7 +1804,7 @@ class plDNN_general(pl.LightningModule):
         return optimizer    
 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 104
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 131
 def train_loop_yx(dataloader, model, loss_fn, optimizer, silent = False):
     size = len(dataloader.dataset)
     for batch, (y_i, xs_i) in enumerate(dataloader):
@@ -1834,7 +1829,7 @@ def train_loop_yx(dataloader, model, loss_fn, optimizer, silent = False):
             if not silent:
                 print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 105
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 132
 def train_error_yx(dataloader, model, loss_fn, silent = False):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
@@ -1855,7 +1850,7 @@ def train_error_yx(dataloader, model, loss_fn, silent = False):
     train_loss /= num_batches
     return(train_loss)
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 106
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 133
 def test_loop_yx(dataloader, model, loss_fn, silent = False):   
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
@@ -1878,7 +1873,7 @@ def test_loop_yx(dataloader, model, loss_fn, silent = False):
         print(f"Test Error: Avg loss: {test_loss:>8f}")
     return(test_loss)
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 107
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 134
 def train_nn_yx(
     cache_path,
     training_dataloader,
@@ -1926,7 +1921,7 @@ def train_nn_yx(
         
     return([model, loss_df])
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 108
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 135
 def yhat_loop_yx(dataloader, model):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
