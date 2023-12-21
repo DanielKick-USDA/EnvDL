@@ -15,13 +15,14 @@ def write_ctrl_json(data: dict):
 
 
 class Scheduler():
-    def __init__(self, background_mode = False, run_main = False):
+    def __init__(self, background_mode = False, run_main = False, nvidia_kill_pids = False):
         self.background_mode = background_mode
         self.exit = False
         self.nvidia_base_pids = []
         self.nvidia_state = {}
         self._init_nvidia()
         self.ipynb_names = []
+        self.nvidia_kill_pids = nvidia_kill_pids
         if run_main:
             self.main()
 
@@ -105,6 +106,8 @@ Example file:
                                 print(f'{dat} not interpretable as True or False')
                         if type(dat) == bool:
                             self.background_mode = dat
+                    if 'nvidia_kill_pids' == key:
+                        self.nvidia_kill_pids = dat
                     if 'exit' == key:
                         self.exit = True
 
@@ -146,13 +149,14 @@ Example file:
 
                 self._read_nvidia()
                 # kill all the processes that were not running at the start. 
-                for gpu_pid in [e for e in self.nvidia_state.keys() if e not in self.nvidia_base_pids]:
-                    subprocess.run(f'kill -9 {gpu_pid}', shell=True)
+                if self.nvidia_kill_pids:
+                    for gpu_pid in [e for e in self.nvidia_state.keys() if e not in self.nvidia_base_pids]:
+                        subprocess.run(f'kill -9 {gpu_pid}', shell=True)
             print(f'Running {time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())}')
         print(    f'Exiting {time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())}')
 
 if __name__=='__main__':
-    Scheduler(background_mode = True, run_main=True)
+    Scheduler(background_mode = True, run_main=True, nvidia_kill_pids = False)
     # shlr = Scheduler()
     # shlr.nvidia_base_pids, shlr.nvidia_state
     # os.listdir('./SchedulerFiles/')
