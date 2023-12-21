@@ -3,9 +3,12 @@
 # %% auto 0
 __all__ = ['calc_cs', 'apply_cs', 'reverse_cs', 'read_split_info', 'find_idxs_split_dict', 'LSUV_', 'Linear_block',
            'Conv1D_x2_Max_block', 'conv3x3', 'conv1x1', 'BasicBlock2d', 'BottleneckBlock2d', 'ResNet2d', 'conv0x3',
-           'conv0x1', 'BasicBlock1d', 'BottleneckBlock1d', 'ResNet1d', 'train_loop', 'train_error', 'test_loop',
-           'yhat_loop', 'train_nn', 'estimate_iterations', 'ACGTDataset', 'BigDataset', 'g2fc_datawrapper',
-           'plDNN_general', 'train_loop_yx', 'train_error_yx', 'test_loop_yx', 'train_nn_yx', 'yhat_loop_yx']
+           'conv0x1', 'BasicBlock1d', 'BottleneckBlock1d', 'ResNet1d', 'VNNHelper', 'reverse_edge_dict',
+           'reverse_node_props', 'Linear_block_reps', 'VisableNeuralNetwork', 'kegg_connections_build',
+           'kegg_connections_clean', 'kegg_connections_append_y_hat', 'ListDataset', 'plVNN',
+           'kegg_connections_sanitize_names', 'train_loop', 'train_error', 'test_loop', 'yhat_loop', 'train_nn',
+           'estimate_iterations', 'ACGTDataset', 'BigDataset', 'g2fc_datawrapper', 'plDNN_general', 'train_loop_yx',
+           'train_error_yx', 'test_loop_yx', 'train_nn_yx', 'yhat_loop_yx']
 
 # %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 2
 import os, re
@@ -25,6 +28,8 @@ from .core import read_json
 from .dna import np_3d_to_hilbert
 
 import lightning.pytorch as pl
+
+from graphviz import Digraph # used in VNN
 
 # %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 5
 def calc_cs(x # numeric array
@@ -693,7 +698,464 @@ class ResNet1d(nn.Module):
 
 
 
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 35
+class VNNHelper():
+    def __init__(self, edge_dict, all_values_are_nodes = True) -> None:
+        self.edge_dict = edge_dict.copy()
+        # handles updating all the lists of node groups (imp, out, edge)
+        self._setup_wrapper(all_values_are_nodes)
+
+        self.node_props = {}
+        for e in self.node_keys_vals['all_keys']:
+            self.node_props[e] = {}
+
+    def _setup_wrapper(self, all_values_are_nodes):
+        if all_values_are_nodes:
+            self._init_missing_nodes_as_input()
+        self.node_keys_vals = self._find_uniq_keys_values(input_dict = self.edge_dict)
+        self.nodes_inp = self._find_nodes_inp(all_key_value_dict = self.node_keys_vals)
+        self.nodes_out = self._find_top_nodes(all_key_value_dict = self.node_keys_vals)
+        self.nodes_edge= self._find_nodes_edge(all_key_value_dict= self.node_keys_vals, nodes_inp= self.nodes_inp, nodes_out = self.nodes_out)
+        # sets self.dependancy_order
+        self._get_run_order()
+
+    # CRUD operations on node proprty dictionary
+    def node_prop_create(self, name):
+        self.node_props[name] = {}
+        
+    def node_prop_read_keys(self, name):
+        return self.node_props[name].keys()
+
+    def node_prop_read_values(self, name, key):
+        return self.node_props[name][key]
+
+    def node_prop_update(self, name, key, value):
+        self.node_props[name][key] = value
+
+    def node_prop_delete(self, name, key=None):
+        if key == None:
+            del self.node_props[name]
+        else:
+            del self.node_props[name][key]
+
+
+    def _find_uniq_keys_values(self, input_dict):
+        """
+        Building a Neural Net from an arbitrary graph
+        start by finding the top level -- all those keys which are theselves not values
+        helper function to get all keys and all value from a dict. Useful for when keys don't have unique values.
+        """
+        all_keys = list(input_dict.keys())
+        all_values = []
+        for e in all_keys:
+            all_values.extend(input_dict[e])
+        all_values = list(set(all_values))
+
+        return({'all_keys': all_keys, 'all_values': all_values})
+
+    def _find_top_nodes(self, all_key_value_dict):
+        """
+        Find order that nodes in the graph should be called to have all dependencies run when they are called.
+        find the dependancies for run order from many dependancies to none
+        wrapper function to find the nodes that aren't any other nodes dependancies.
+        """
+        return([e for e in all_key_value_dict['all_keys'] if e not in all_key_value_dict['all_values']])
+    
+    def _init_missing_nodes_as_input(self):
+        node_keys_vals = self._find_uniq_keys_values(input_dict = self.edge_dict)
+        add_these_nodes = [e for e in node_keys_vals['all_values'] if e not in node_keys_vals['all_keys']]
+        for e in add_these_nodes:
+            self.edge_dict[e] = []
+
+    def _find_nodes_inp(self, all_key_value_dict):
+        # """
+        # wrapper function to find the input nodes. They don't occur in the keys and thus won't be added to the list otherwise.
+        # another way to do this would have been to 
+        # """
+        # return([e for e in all_key_value_dict['all_values'] if e not in all_key_value_dict['all_keys']])
+        return [e for e in all_key_value_dict['all_keys'] if self.edge_dict[e] == []]
+
+    def _find_nodes_edge(self, all_key_value_dict, nodes_inp, nodes_out):
+        return [e for e in all_key_value_dict['all_keys'] if e not in nodes_inp+nodes_out]
+
+    def append_output_node(self, node_name):
+        if node_name in self.edge_dict.keys():
+            pass
+        else:
+            self.edge_dict[node_name] = self.nodes_out
+            self._setup_wrapper()
+            self.node_prop_create(name = node_name)
+
+    def _get_run_order(self, max_iter = 1000):
+        temp = self.edge_dict.copy()
+        dependancy_order = []
+        # Then iterate
+        for _ in range(max_iter): 
+            top_nodes = self._find_top_nodes(all_key_value_dict = self._find_uniq_keys_values(input_dict = temp))
+            if top_nodes == []:
+                break
+            else:
+                dependancy_order += top_nodes    
+                # remove nodes from the graph that are at the 'top' level and haven't already been removed
+                for key in [e for e in dependancy_order if e in temp.keys()]:
+                    temp.pop(key)
+
+        # reverse to get the order that the nodes should be called
+        dependancy_order.reverse()                
+        self.dependancy_order = dependancy_order
+
+
+    def set_node_props(self, key, node_val_zip):
+        for name, val in node_val_zip:
+            self.node_prop_update(name = name, key=key, value=val)
+    
+    def calc_edge_inp(self):
+        for name in self.nodes_edge + self.nodes_out: 
+            inp_size = sum([self.node_prop_read_values(name = e, key= 'out') for e in self.edge_dict[name]])
+            self.node_prop_update(name = name, key='inp', value=inp_size)     
+
+    def mk_digraph(self, include = ['node_name', 'inp_size', 'out_size']):
+        dot = ''
+        dot = Digraph()
+        for key in self.node_props.keys():
+            key_label = []
+
+            if 'node_name' in include: key_label += [key]
+            if 'inp_size' in include: key_label += ['In  '+str(self.node_props[key]['inp'])]
+            if 'out_size' in include: key_label += ['Out '+str(self.node_props[key]['out'])]
+            
+            if len(key_label) == 0:
+                key_label = ''
+            else:
+                key_label = '\n'.join(key_label)
+
+            dot.node(key, key_label)
+            for value in self.edge_dict[key]:
+                # edge takes a head/tail whereas edges takes name pairs concatednated (A, B -> AB)in a list
+                dot.edge(value, key)    
+        return dot
+    
+
+
+
+
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 38
+def reverse_edge_dict(edge_dict):
+    # Reverse connection directions. Connections are not one to one so it's not as simple as swapping keys/values
+    edge_dict_reversed = {}
+    # get new keys
+    all_values = []
+    for e in edge_dict.keys():
+        all_values+=edge_dict[e]
+    for e in set(all_values):
+        edge_dict_reversed[e] = []
+
+    for e in edge_dict.keys():
+        if edge_dict[e] == []:
+            pass
+        else:
+            for ee in edge_dict[e]: 
+                edge_dict_reversed[ee] += [e]
+                # print(e, kegg_connections[e])
+                # break
+
+    # deduplicate edges
+    for e in edge_dict_reversed.keys():
+        edge_dict_reversed[e] = list(set( edge_dict_reversed[e] ))
+
+    return edge_dict_reversed
+
 # %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 39
+def reverse_node_props(prop_dict, 
+                       conversion_dict = {'out':'inp',
+                                          'inp':'out',
+                                          'flatten':''}):
+    prop_dict_reversed = {}
+    for e in prop_dict.keys():
+        prop_dict_reversed[e] = {}
+        for ee in prop_dict[e].keys():
+            if ee not in conversion_dict.keys():
+                prop_dict_reversed[e][ee] = prop_dict[e][ee]
+            else:
+                if (conversion_dict[ee].lower() in ['none', '']):
+                    # get rid of entries liek flatten
+                    pass
+                else:
+                    prop_dict_reversed[e][conversion_dict[ee]] = prop_dict[e][ee]
+    return prop_dict_reversed
+
+
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 41
+def Linear_block_reps(in_size, out_size, drop_pr, block_reps):
+    block_list = []
+    for i in range(block_reps):
+        if i == 0:
+            block_list += [
+                nn.Linear(in_size, out_size),
+                nn.ReLU(),
+                nn.Dropout(drop_pr)]
+        else:
+            block_list += [
+                nn.Linear(out_size, out_size),
+                nn.ReLU(),
+                nn.Dropout(drop_pr)]
+
+    block = nn.ModuleList(block_list)
+    return(block)     
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 42
+class VisableNeuralNetwork(nn.Module):
+    def __init__(self, 
+                 node_props, 
+                 Linear_block,
+                 dependancy_order,
+                 edge_dict,
+                 node_to_inp_num_dict,
+                 **kwargs
+                ):
+        super(VisableNeuralNetwork, self).__init__()
+        self.dependancy_order = dependancy_order
+        self.edge_dict = edge_dict
+        self.node_to_inp_num_dict = node_to_inp_num_dict
+
+        # Figure out what nodes should be outputs. This will be of use for multiple predictions (yield and disease resistance say)
+        # and for VAEs.
+        all_keys = []
+        all_vals = []
+        for e in self.edge_dict.keys():
+            all_keys += [e]
+            all_vals += self.edge_dict[e]
+        all_keys = list(set(all_keys))
+        all_vals = list(set(all_vals))
+        output_names = [e for e in all_keys if e not in all_vals]
+        self.output_names = output_names
+        
+        self.return_dict = False
+        if 'return_dict' in kwargs.keys():
+            self.return_dict = kwargs['return_dict']
+
+        # Store nodes in dict
+        layer_dict = {}
+        for key in node_props.keys():
+            node_list = []
+            if 'flatten' in node_props[key]:
+                node_list += [nn.Flatten()]
+            node_list += [nn.Flatten()]
+            #TODO change linear block instead of conditioning on node name.
+            if key not in self.output_names:
+                node_list += [Linear_block(
+                    in_size=node_props[key]['inp'], 
+                    out_size=node_props[key]['out'], 
+                    drop_pr=node_props[key]['drop'],
+                    block_reps=node_props[key]['reps'])]
+            else:
+                node_list += [nn.Linear(node_props[key]['inp'], node_props[key]['out'])]
+
+            layer_dict[key] = nn.ModuleList(node_list)
+
+        self.layer_dict = nn.ModuleDict(layer_dict)
+        
+
+    def forward(self, x):
+        temp_res_dict = {}
+        for key in self.dependancy_order:
+            
+            # if the node depends on raw inputs, get them.
+            if key in self.node_to_inp_num_dict:
+                xin = [ x[self.node_to_inp_num_dict[key]] ]
+
+            # if the node depends on inputs that have been stored in the lookup dict
+            if self.edge_dict[key] != []:
+                if xin == None:
+                    xin = []
+                xin += [temp_res_dict[e] for e in self.edge_dict[key]]
+                
+            # join all input tensors.
+            xin = torch.concat(xin, axis = 1)
+
+            for l in self.layer_dict[key]:
+                if type(l) == torch.nn.modules.container.ModuleList:
+                    for ll in l:            
+                        xin = ll(xin)
+                else:
+                    xin = l(xin)
+                    
+            temp_res_dict[key] = xin
+            xin = None 
+        if (len(self.output_names) == 1) & (self.return_dict == False):
+            return temp_res_dict[self.dependancy_order[-1]]
+        else:
+            return {e:temp_res_dict[e] for e in self.output_names}
+
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 49
+# LOD is list of dicts.
+# def kegg_brite_LOD_to_connections(
+def kegg_connections_build(
+        n_genes, 
+        kegg_gene_brite):
+    """
+    The goal here is to have a dict with each node and a list of it's children. 
+    For example, the graph
+    a--b--d
+    |-c--e
+    Would be parsed into     
+    {'a':['b', 'c'],
+    'b':['d'],
+    'c':['e']}
+    """
+    kegg_connections = {}
+    # for all genes in list
+    for i in tqdm(range(n_genes)): 
+        temp = kegg_gene_brite[i]['BRITE']['BRITE_PATHS']
+        # clean up to make sure that there are no ":" characters. These can mess up graphviz
+        temp = [[temp[j][i].replace(':', '-') for i in range(len(temp[j])) ] for j in range(len(temp))]
+        # all paths through graph associated with a gene
+        for j in range(len(temp)):
+            # steps of the path through the graph
+            for k in range(len(temp[j])-1):
+                
+                # name standardization 
+                temp_jk  = temp[j][k]
+                temp_jk1 = temp[j][k+1]
+                temp_jk  = temp_jk.lower().title().replace(' ', '')
+                temp_jk1 = temp_jk1.lower().title().replace(' ', '')
+                
+                # if this is a new key, add it and add the k+1 entry as it's child
+                if temp_jk  not in kegg_connections.keys():
+                    kegg_connections[temp_jk] = [temp_jk1]
+                else: 
+                    # Check to see if there's a new child to add   
+                    if temp_jk1 not in kegg_connections[temp_jk]:
+                        # make sure that no key contains itself. This was a problem for 'Others' which is now disallowed.
+                        if (temp_jk != temp_jk1):
+                            # add it.
+                            kegg_connections[temp_jk].extend([temp_jk1])
+    return(kegg_connections)          
+
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 50
+def kegg_connections_clean(kegg_connections):
+    if 'Others' in kegg_connections.keys():
+        del kegg_connections['Others']
+        print('Removed node "Others"')
+
+    # remove 'Others' as a possible value
+    for key in kegg_connections.keys():
+        kegg_connections[key] = [e for e in kegg_connections[key] if e != 'Others']
+
+    # Make sure that no list contains it's own key
+    for key in kegg_connections.keys():
+        kegg_connections[key] = [e for e in kegg_connections[key] if e != key]
+
+    # there might be associations with no dependants and with no dependants except those that have no dependants.
+    # Build up a list with those keys that don't connect back to snps then I'll pass over the connection dict once to remove references to them.
+    rm_list = []
+    rm_list_i = len(rm_list)
+    rm_list_j = -1
+    for i in range(100):
+        if rm_list_i == rm_list_j:
+            break
+        else:
+            rm_list = [key for key in kegg_connections.keys() if [e for e in kegg_connections[key] if e not in rm_list] == []]
+            rm_list_j = rm_list_i 
+            rm_list_i = len(rm_list)
+    # rm_list
+
+    for key in rm_list:
+        del kegg_connections[key]
+        
+    for key in kegg_connections.keys():
+        kegg_connections[key] = [e for e in kegg_connections[key] if e not in rm_list]
+    return kegg_connections
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 51
+def kegg_connections_append_y_hat(kegg_connections):
+    # add yhat node to the graph
+    temp_values = []
+    for key in kegg_connections.keys():
+        temp_values += kegg_connections[key]
+
+    kegg_connections['y_hat'] = [key for key in kegg_connections.keys() if key not in temp_values]
+    return kegg_connections
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 61
+class ListDataset(Dataset): # for any G containing matix with many (phno) to one (geno)
+    def __init__(self, 
+                 y, 
+                 x_list,
+                 obs_idxs, # this is a list of the indexes used. It allows us to pass in smaller 
+                           # tensors and then get the right genotype
+                 obs_geno_lookup,
+                 transform = None, target_transform = None,
+                 **kwargs 
+                ):
+        if 'device' in kwargs:
+            self.device = kwargs['device']
+        self.y = y 
+        self.x_list = x_list
+        self.obs_idxs = obs_idxs
+        self.obs_geno_lookup = obs_geno_lookup
+        self.transform = transform
+        self.target_transform = target_transform    
+        
+    def __len__(self):
+        return len(self.y)
+    
+    def __getitem__(self, idx):
+        y_idx =self.y[idx]
+        
+        new_idx = self.obs_idxs[idx]
+        idx_geno = self.obs_geno_lookup[new_idx, 1]
+        x_idx =[x[idx_geno, ] for x in self.x_list] 
+        
+        if self.target_transform:
+            y_idx = self.transform(y_idx)
+            x_idx = [self.transform(x) for x in x_idx]
+            
+        return y_idx, x_idx
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 62
+class plVNN(pl.LightningModule):
+    def __init__(self, mod):
+        super().__init__()
+        self.mod = mod
+    def training_step(self, batch, batch_idx):
+        y_i, xs_i = batch
+        pred = self.mod(xs_i)
+        loss = F.mse_loss(pred, y_i)
+        self.log("train_loss", loss)   
+        return(loss)
+        
+    def validation_step(self, batch, batch_idx):
+        y_i, xs_i = batch
+        pred = self.mod(xs_i)
+        loss = F.mse_loss(pred, y_i)
+        self.log('val_loss', loss)        
+     
+    def configure_optimizers(self, **kwargs):
+        optimizer = torch.optim.Adam(self.parameters(), **kwargs)
+        return optimizer    
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 66
+def kegg_connections_sanitize_names(kegg_connections, replace_chars = {'.':'_'}):
+    # have to clean the key values so that none have '.' because I'm looking up nodes by name and pytorch doesn't allow this.
+    #NOTE this will potentially (but not here) create a bug if there are genes named with '.'    
+
+    def replace_select_chars(in_str, replace_chars):
+        for key in replace_chars.keys():
+            in_str = in_str.replace(key, replace_chars[key])
+        return in_str
+
+    new_kegg_connections = {}
+    for key in kegg_connections.keys():
+        new_kegg_connections[replace_select_chars(in_str = key, replace_chars=replace_chars)] = [replace_select_chars(in_str = e, replace_chars=replace_chars) for e in kegg_connections[key]]
+
+    return new_kegg_connections
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 73
 def train_loop(dataloader, model, loss_fn, optimizer, silent = False):
     size = len(dataloader.dataset)
     for batch, (xs_i, y_i) in enumerate(dataloader):
@@ -712,7 +1174,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, silent = False):
                 print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 40
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 74
 def train_error(dataloader, model, loss_fn, silent = False):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
@@ -726,7 +1188,7 @@ def train_error(dataloader, model, loss_fn, silent = False):
     train_loss /= num_batches
     return(train_loss) 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 41
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 75
 def test_loop(dataloader, model, loss_fn, silent = False):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
@@ -742,7 +1204,7 @@ def test_loop(dataloader, model, loss_fn, silent = False):
         print(f"Test Error: Avg loss: {test_loss:>8f}")
     return(test_loss) 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 42
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 76
 def yhat_loop(dataloader, model):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
@@ -760,7 +1222,7 @@ def yhat_loop(dataloader, model):
     out = pd.DataFrame(out, columns = ['y_true', 'y_pred'])
     return(out)
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 43
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 77
 def train_nn(
     cache_path,
     training_dataloader,
@@ -796,7 +1258,7 @@ def train_nn(
         
     return([model, loss_df])
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 46
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 80
 def estimate_iterations(sec_per_it = 161):
     hours = [1, 2, 4, 8, 12, 24]
     res = pd.DataFrame(zip(hours, 
@@ -805,7 +1267,7 @@ def estimate_iterations(sec_per_it = 161):
     ) for i in hours]), columns = ['Hours', 'Iterations'])
     return(res)
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 48
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 82
 class ACGTDataset(Dataset): # for any G containing matix with many (phno) to one (geno)
     def __init__(self, 
                  y, 
@@ -853,7 +1315,7 @@ class ACGTDataset(Dataset): # for any G containing matix with many (phno) to one
             y_idx = self.transform(y_idx)
         return g_idx, y_idx
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 51
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 85
 class BigDataset(Dataset):
     def __init__(
         self,
@@ -1004,7 +1466,34 @@ class BigDataset(Dataset):
         return out
 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 58
+# using send_batch_to_gpu to reduce needed memory
+
+# X = g2fc_datawrapper()
+# X.set_split()
+# X.load_all(name_list = ['obs_geno_lookup', 'YMat', 'ACGT',], store=True) 
+
+# X.calc_cs('YMat', version = 'np', filter = 'val:train')
+# X.calc_cs('ACGT',                 filter = 'val:train', filter_lookup= 'obs_geno_lookup')
+
+# training_dataloader = DataLoader(BigDataset(
+#     lookups_are_filtered = False,
+#     lookup_obs  = X.get('val:train',       ops_string='asarray from_numpy      '),
+#     lookup_geno = X.get('obs_geno_lookup', ops_string='asarray from_numpy      '),
+#     # y =           X.get('YMat',            ops_string='asarray from_numpy float')[:, None],
+#     # G =           X.get('ACGT',            ops_string='        from_numpy float'),
+#     # G_type = 'raw',
+#     G =           X.get('KEGG_slices',     ops_string='        from_numpy float'),
+#     G_type = 'list',
+#     send_batch_to_gpu = 'cuda:0'
+#     ),
+#     batch_size = 10,
+#     shuffle = True
+# )
+
+#                                      # 21184MiB needed for full dataset.
+# gi = next(iter(training_dataloader)) #   470MiB GPU used after being called
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 87
 # Standard data prep
 
 # Wrapper function to hide the steps of loading data
@@ -1217,6 +1706,11 @@ E.g. filter = \'val:train\',  filter_lookup = \'obs_env_lookup\'
         ops_string = [e for e in ops_string.split(' ') if e != '']
         for ops in ops_string:
             if ops[0:6] == 'filter':
+                #FIXME Identified a bug on 12/14 where the ops string 
+                # 'cs filter:val:train asarray from_numpy float cuda:0
+                # works exactly as expected but filtering before cs
+                # 'filter:val:train cs asarray from_numpy float cuda:0
+                # causes NO filtering to occur. 
                 _, which_dict, which_split = ops.split(':')
 
                 if which_split == 'train':  key = 'train_idx'
@@ -1282,7 +1776,7 @@ E.g. filter = \'val:train\',  filter_lookup = \'obs_env_lookup\'
 # X.get('WMat', ops_string='cs asarray')[0:3, 0:3, 0]
 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 60
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 89
 class plDNN_general(pl.LightningModule):
     def __init__(self, mod, log_weight_stats = False):
         super().__init__()
@@ -1315,7 +1809,7 @@ class plDNN_general(pl.LightningModule):
         return optimizer    
 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 75
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 104
 def train_loop_yx(dataloader, model, loss_fn, optimizer, silent = False):
     size = len(dataloader.dataset)
     for batch, (y_i, xs_i) in enumerate(dataloader):
@@ -1340,7 +1834,7 @@ def train_loop_yx(dataloader, model, loss_fn, optimizer, silent = False):
             if not silent:
                 print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 76
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 105
 def train_error_yx(dataloader, model, loss_fn, silent = False):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
@@ -1361,7 +1855,7 @@ def train_error_yx(dataloader, model, loss_fn, silent = False):
     train_loss /= num_batches
     return(train_loss)
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 77
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 106
 def test_loop_yx(dataloader, model, loss_fn, silent = False):   
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
@@ -1384,7 +1878,7 @@ def test_loop_yx(dataloader, model, loss_fn, silent = False):
         print(f"Test Error: Avg loss: {test_loss:>8f}")
     return(test_loss)
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 78
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 107
 def train_nn_yx(
     cache_path,
     training_dataloader,
@@ -1432,7 +1926,7 @@ def train_nn_yx(
         
     return([model, loss_df])
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 79
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 108
 def yhat_loop_yx(dataloader, model):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
