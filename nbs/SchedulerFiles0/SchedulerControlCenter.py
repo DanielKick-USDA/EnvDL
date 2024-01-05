@@ -2,20 +2,20 @@
 
 import os, re, subprocess, json, time
 
-def write_ctrl_json(data: dict):
-    ctrl_files = [e for e in os.listdir('./SchedulerFiles/') if (re.match('ctrl.json', e) or re.match('ctrl\d+.json', e))]
+def write_ctrl_json(data: dict, write_dir = './'):
+    ctrl_files = [e for e in os.listdir(write_dir) if (re.match('ctrl.json', e) or re.match('ctrl\d+.json', e))]
     # find the next number to write to. In case 'ctrl.json' and 'ctrl0.json' exist, I'll write to 1
     max_num = [e.replace('ctrl', '').replace('.json', '') for e in  ctrl_files]
     max_num = [int(e) for e in max_num if e != '']
     if max_num == []: max_num = 0
     else: max_num = max(max_num)
 
-    with open(f'./SchedulerFiles/ctrl{max_num+1}.json', 'w', encoding='utf-8') as f:
+    with open(f'{write_dir}/ctrl{max_num+1}.json', 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
 
 class Scheduler():
-    def __init__(self, background_mode = False, run_main = False, nvidia_kill_pids = False):
+    def __init__(self, background_mode = False, run_main = False, nvidia_kill_pids = False, scheduler_file_path = './'):
         self.background_mode = background_mode
         self.exit = False
         self.nvidia_base_pids = []
@@ -23,9 +23,14 @@ class Scheduler():
         self._init_nvidia()
         self.ipynb_names = []
         self.nvidia_kill_pids = nvidia_kill_pids
+        self.scheduler_file_path = scheduler_file_path
+
+        # write pid of python running scheduler in case it needs to be manually killed.
+        with open(f'./SchedulerPID.json', 'w', encoding='utf-8') as f:
+                json.dump({'PID':os.getpid()}, f, ensure_ascii=False, indent=4)
+
         if run_main:
             self.main()
-
 
     def _init_nvidia(self):
         self._read_nvidia()
@@ -51,10 +56,10 @@ class Scheduler():
             self.nvidia_state[e['PID']] = e
     
     def _parse_ctrl_jsons(self):
-        ctrl_files = [e for e in os.listdir('./SchedulerFiles/') if (re.match('ctrl.json', e) or re.match('ctrl\d+.json', e))]
+        ctrl_files = [e for e in os.listdir(self.scheduler_file_path) if (re.match('ctrl.json', e) or re.match('ctrl\d+.json', e))]
         if len(ctrl_files) >= 1:
             for ctrl_file in ctrl_files:            
-                with open('./SchedulerFiles/'+ctrl_file, 'r') as f:
+                with open(self.scheduler_file_path+ctrl_file, 'r') as f:
                     data = json.load(f)
 
                 keys = tuple(data.keys())
@@ -112,7 +117,7 @@ Example file:
                         self.exit = True
 
                 # remove the file
-                os.unlink('./SchedulerFiles/'+ctrl_file)
+                os.unlink(self.scheduler_file_path+ctrl_file)
 
     def _advance_queue(self):
         if len(self.ipynb_names) == 0:
@@ -120,7 +125,7 @@ Example file:
         else:
             ipynb_name = self.ipynb_names.pop(0)
             if os.path.exists(ipynb_name) == False:
-                pass
+                print(f'notebook {ipynb_name} not found in pwd.\nDid you mean to run "../{ipynb_name}" ?')
             else:
                 process = subprocess.Popen(
                     f"conda run -n fastai jupyter execute {ipynb_name}".split(), stdout=subprocess.PIPE
@@ -156,10 +161,10 @@ Example file:
         print(    f'Exiting {time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())}')
 
 if __name__=='__main__':
-    Scheduler(background_mode = True, run_main=True, nvidia_kill_pids = False)
+    Scheduler(background_mode = True, run_main=True, nvidia_kill_pids = False, scheduler_file_path = './')
     # shlr = Scheduler()
     # shlr.nvidia_base_pids, shlr.nvidia_state
-    # os.listdir('./SchedulerFiles/')
+    # os.listdir('./')
     # write_ctrl_json(data = {
     # 'info':[],
     # 'nvidia_base_pids_add':[''],
