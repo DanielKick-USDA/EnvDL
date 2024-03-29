@@ -8,6 +8,28 @@
 /nbs/rmme_mnist/*
 /nbs/nohup.out
 
+# tensorboard
+*.yaml
+epoch=*
+events.out.tfevents*
+
+# Scheduler files
+nohup.out
+SchedulerPID.json
+/nbs/SchedulerFiles1
+/nbs/SchedulerFiles2
+/nbs/SchedulerFiles3
+/nbs/SchedulerFiles4
+/nbs/SchedulerFiles5
+/nbs/SchedulerFiles6
+/nbs/SchedulerFiles7
+/nbs/SchedulerFiles8
+/nbs/SchedulerFiles9
+
+# For using nextflow instead of my workaround scheduler
+.nextflow/
+work/
+
 
 # From the project structure: -------------------------------------------------
 /data

@@ -6,9 +6,9 @@ __all__ = ['calc_cs', 'apply_cs', 'reverse_cs', 'read_split_info', 'find_idxs_sp
            'conv0x1', 'BasicBlock1d', 'BottleneckBlock1d', 'ResNet1d', 'VNNHelper', 'reverse_edge_dict',
            'reverse_node_props', 'Linear_block_reps', 'VisableNeuralNetwork', 'kegg_connections_build',
            'kegg_connections_clean', 'kegg_connections_append_y_hat', 'ListDataset', 'plVNN',
-           'kegg_connections_sanitize_names', 'train_loop', 'train_error', 'test_loop', 'yhat_loop', 'train_nn',
-           'estimate_iterations', 'ACGTDataset', 'BigDataset', 'g2fc_datawrapper', 'plDNN_general', 'train_loop_yx',
-           'train_error_yx', 'test_loop_yx', 'train_nn_yx', 'yhat_loop_yx']
+           'kegg_connections_sanitize_names', 'VNNVAEHelper', 'plVNNVAE', 'train_loop', 'train_error', 'test_loop',
+           'yhat_loop', 'train_nn', 'estimate_iterations', 'ACGTDataset', 'BigDataset', 'g2fc_datawrapper',
+           'plDNN_general', 'train_loop_yx', 'train_error_yx', 'test_loop_yx', 'train_nn_yx', 'yhat_loop_yx']
 
 # %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 2
 import os, re
@@ -985,7 +985,7 @@ class VisableNeuralNetwork(nn.Module):
             return {e:temp_res_dict[e] for e in self.output_names}
 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 68
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 51
 # LOD is list of dicts.
 # def kegg_brite_LOD_to_connections(
 def kegg_connections_build(
@@ -1031,7 +1031,7 @@ def kegg_connections_build(
     return(kegg_connections)          
 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 69
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 52
 def kegg_connections_clean(kegg_connections):
     if 'Others' in kegg_connections.keys():
         del kegg_connections['Others']
@@ -1066,7 +1066,7 @@ def kegg_connections_clean(kegg_connections):
         kegg_connections[key] = [e for e in kegg_connections[key] if e not in rm_list]
     return kegg_connections
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 70
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 53
 def kegg_connections_append_y_hat(kegg_connections):
     # add yhat node to the graph
     temp_values = []
@@ -1076,7 +1076,7 @@ def kegg_connections_append_y_hat(kegg_connections):
     kegg_connections['y_hat'] = [key for key in kegg_connections.keys() if key not in temp_values]
     return kegg_connections
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 80
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 63
 class ListDataset(Dataset): # for any G containing matix with many (phno) to one (geno)
     def __init__(self, 
                  y, 
@@ -1112,7 +1112,7 @@ class ListDataset(Dataset): # for any G containing matix with many (phno) to one
             
         return y_idx, x_idx
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 81
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 64
 class plVNN(pl.LightningModule):
     def __init__(self, mod):
         super().__init__()
@@ -1134,7 +1134,7 @@ class plVNN(pl.LightningModule):
         optimizer = torch.optim.Adam(self.parameters(), **kwargs)
         return optimizer    
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 85
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 68
 def kegg_connections_sanitize_names(kegg_connections, replace_chars = {'.':'_'}):
     # have to clean the key values so that none have '.' because I'm looking up nodes by name and pytorch doesn't allow this.
     #NOTE this will potentially (but not here) create a bug if there are genes named with '.'    
@@ -1150,7 +1150,88 @@ def kegg_connections_sanitize_names(kegg_connections, replace_chars = {'.':'_'})
 
     return new_kegg_connections
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 100
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 76
+class VNNVAEHelper(nn.Module):
+    def __init__(self, encoder, decoder, latent_inp_size, latent_size):
+        super().__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+
+        self.fc_mu      = nn.Sequential(nn.Linear(latent_inp_size, latent_size))
+        self.fc_log_var = nn.Sequential(nn.Linear(latent_inp_size, latent_size))
+        self.fc_reverse = nn.Sequential(nn.Linear(latent_size, latent_inp_size))
+    
+    def encode(self, x):
+        return self.encoder(x)
+    
+    def reparam(self, x):
+        mu      = self.fc_mu(x)
+        log_var = self.fc_log_var(x)
+        return([mu, log_var])
+    
+    def sample(self, mu, log_var):
+        std = torch.exp(log_var/2)
+        p = torch.distributions.Normal(torch.zeros_like(mu), torch.ones_like(std))
+        q = torch.distributions.Normal(mu, std)
+        z = q.rsample()
+        return p, q, z
+    
+    def reparam_rev(self, z):
+        return self.fc_reverse(z)
+
+    def decode(self, x):
+        return self.decoder(x)
+    
+    def forward(self, x, return_encoding = False):
+        x_enc       = self.encode(x=x)
+        if not return_encoding:
+            mu, log_var = self.reparam(x=x_enc)
+            p, q, z     = self.sample(mu=mu, log_var=log_var)
+            xprime      = self.reparam_rev(z=z)
+            xhat        = self.decode([xprime])
+
+        if return_encoding: return x_enc
+        else: return xhat, p, q, z
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 77
+class plVNNVAE(pl.LightningModule):
+    def __init__(self, vvh, lookup_dict, kl_coeff = 0.1):
+        super().__init__()
+        self.VNNVAEHelper = vvh
+        self.kl_coeff = kl_coeff
+        self.lookup_dict = lookup_dict
+
+    def forward(self, x, return_encoding = False):
+        return self.VNNVAEHelper(x, return_encoding = return_encoding)
+    
+    def training_step(self, batch, batch_idx):
+        x = batch[1]
+        xhat, p, q, z = self.forward(x, return_encoding = False)
+        # calculate losses
+        ## reconstruction
+        tensor_keys = tuple(self.lookup_dict.keys())
+
+        recon_loss = F.mse_loss(
+            torch.concat([xhat[e]                      for e in tensor_keys], axis = 1), 
+            torch.concat([x[self.lookup_dict[e]].flatten(1) for e in tensor_keys], axis = 1),        
+            reduction='mean')
+
+        # recon_loss = F.mse_loss(xhat, x, reduction='mean')
+        ## KLD
+        log_qz = q.log_prob(z)
+        log_pz = p.log_prob(z)
+        kl = log_qz - log_pz
+        kl = kl.mean()
+        kl *= self.kl_coeff
+        loss = kl + recon_loss
+        self.log('train_loss', loss)
+        return loss#, logs
+     
+    def configure_optimizers(self, **kwargs):
+        optimizer = torch.optim.Adam(self.parameters(), **kwargs)
+        return optimizer
+
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 83
 def train_loop(dataloader, model, loss_fn, optimizer, silent = False):
     size = len(dataloader.dataset)
     for batch, (xs_i, y_i) in enumerate(dataloader):
@@ -1169,7 +1250,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, silent = False):
                 print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 101
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 84
 def train_error(dataloader, model, loss_fn, silent = False):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
@@ -1183,7 +1264,7 @@ def train_error(dataloader, model, loss_fn, silent = False):
     train_loss /= num_batches
     return(train_loss) 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 102
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 85
 def test_loop(dataloader, model, loss_fn, silent = False):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
@@ -1199,7 +1280,7 @@ def test_loop(dataloader, model, loss_fn, silent = False):
         print(f"Test Error: Avg loss: {test_loss:>8f}")
     return(test_loss) 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 103
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 86
 def yhat_loop(dataloader, model):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
@@ -1217,7 +1298,7 @@ def yhat_loop(dataloader, model):
     out = pd.DataFrame(out, columns = ['y_true', 'y_pred'])
     return(out)
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 104
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 87
 def train_nn(
     cache_path,
     training_dataloader,
@@ -1253,7 +1334,7 @@ def train_nn(
         
     return([model, loss_df])
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 107
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 90
 def estimate_iterations(sec_per_it = 161):
     hours = [1, 2, 4, 8, 12, 24]
     res = pd.DataFrame(zip(hours, 
@@ -1262,7 +1343,7 @@ def estimate_iterations(sec_per_it = 161):
     ) for i in hours]), columns = ['Hours', 'Iterations'])
     return(res)
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 109
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 92
 class ACGTDataset(Dataset): # for any G containing matix with many (phno) to one (geno)
     def __init__(self, 
                  y, 
@@ -1310,7 +1391,7 @@ class ACGTDataset(Dataset): # for any G containing matix with many (phno) to one
             y_idx = self.transform(y_idx)
         return g_idx, y_idx
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 112
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 95
 class BigDataset(Dataset):
     def __init__(
         self,
@@ -1488,7 +1569,7 @@ class BigDataset(Dataset):
 #                                      # 21184MiB needed for full dataset.
 # gi = next(iter(training_dataloader)) #   470MiB GPU used after being called
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 114
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 97
 # Standard data prep
 
 # Wrapper function to hide the steps of loading data
@@ -1771,7 +1852,7 @@ E.g. filter = \'val:train\',  filter_lookup = \'obs_env_lookup\'
 # X.get('WMat', ops_string='cs asarray')[0:3, 0:3, 0]
 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 116
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 99
 class plDNN_general(pl.LightningModule):
     def __init__(self, mod, log_weight_stats = False):
         super().__init__()
@@ -1804,7 +1885,7 @@ class plDNN_general(pl.LightningModule):
         return optimizer    
 
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 131
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 114
 def train_loop_yx(dataloader, model, loss_fn, optimizer, silent = False):
     size = len(dataloader.dataset)
     for batch, (y_i, xs_i) in enumerate(dataloader):
@@ -1829,7 +1910,7 @@ def train_loop_yx(dataloader, model, loss_fn, optimizer, silent = False):
             if not silent:
                 print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 132
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 115
 def train_error_yx(dataloader, model, loss_fn, silent = False):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
@@ -1850,7 +1931,7 @@ def train_error_yx(dataloader, model, loss_fn, silent = False):
     train_loss /= num_batches
     return(train_loss)
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 133
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 116
 def test_loop_yx(dataloader, model, loss_fn, silent = False):   
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
@@ -1873,7 +1954,7 @@ def test_loop_yx(dataloader, model, loss_fn, silent = False):
         print(f"Test Error: Avg loss: {test_loss:>8f}")
     return(test_loss)
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 134
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 117
 def train_nn_yx(
     cache_path,
     training_dataloader,
@@ -1921,7 +2002,7 @@ def train_nn_yx(
         
     return([model, loss_df])
 
-# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 135
+# %% ../nbs/00.02_core_dlfn_Deep_Learning_Convenience_Functions.ipynb 118
 def yhat_loop_yx(dataloader, model):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
